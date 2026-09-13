@@ -2,6 +2,7 @@
 
 Smart-X is a simulated IoT ingestion gateway for a distributed sensor network (hydroponic farms, smart grid nodes, utility trackers). This part implements the **Sensor Data Ingestion and Telemetry** pillar: a .NET 10 Web API backend and a Blazor WebAssembly client.
 ## ST10437401
+## EVANILDO JULIO CHAVES JOSE
 
 ## Architecture
 
