@@ -8,6 +8,7 @@ namespace SmartX.Shared;
 /// Generic wrapper so the gateway can carry any telemetry payload type
 /// (float, int, bool, etc.) without boxing/unboxing or type-coercion overhead.
 /// </summary>
+/// 
 public class TelemetryPacket<T>
 {
     public Guid Id { get; set; } = Guid.NewGuid();
