@@ -230,9 +230,11 @@
             > 1.5 => ("warning", "Watch — drifting"),
             _ => ("normal", "Nominal")
         };
-    }
+    } // Dispose pattern to clean up the timer when the component is disposed
 
     public void Dispose() => timer?.Dispose();
 
     private record ValidationResponse(List<string> Path, bool IsValid);
 }
+
+
