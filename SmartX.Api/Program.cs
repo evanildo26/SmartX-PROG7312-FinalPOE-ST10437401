@@ -107,3 +107,6 @@ app.MapGet("/api/power/aggregate", (double watts1, double watts2) =>
 });
 
 app.Run();
+
+// Request DTOs
+//-----------------------------------------------------END----------------------------//
