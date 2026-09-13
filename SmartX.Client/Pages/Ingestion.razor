@@ -5,6 +5,7 @@
 
 <h2>📡 Sensor Data Ingestion & Telemetry</h2>
 
+
 <h4>Register a sensor</h4>
 <div class="form-row">
     <input @bind="mac" placeholder="MAC Address (e.g. AA:BB:CC:01)" />
@@ -213,6 +214,7 @@
 
     private (string CssClass, string Label) GetStatus(SensorProfile s)
     {
+        // Compute z-score of the latest reading vs. its own rolling average
         var readings = s.ProcessedReadings;
         if (readings.Count < 3) return ("normal", "Gathering baseline…");
 
