@@ -28,3 +28,5 @@ public class SensorProfile
             ProcessedReadings.AddRange(batch);
     }
 }
+
+//---------------------------------------------------END-------------------------------//
