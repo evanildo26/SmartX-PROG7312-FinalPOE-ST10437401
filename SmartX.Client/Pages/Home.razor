@@ -1,0 +1,29 @@
+﻿@page "/"
+
+<h1>Smart-X IoT Mesh Ecosystem</h1>
+<p>Gateway control centre</p>
+
+<div class="pillar-grid">
+    <a class="pillar-card active" href="/ingestion">
+        <h3>📡 Sensor Data Ingestion & Telemetry</h3>
+        <p>Register devices, push telemetry, attach logs.</p>
+    </a>
+
+    <div class="pillar-card disabled">
+        <h3>⏱ Real-Time Command Stream & History</h3>
+        <p>Coming in Part 2.</p>
+    </div>
+
+    <div class="pillar-card disabled">
+        <h3>🕸 Network Topology & Mesh Routing</h3>
+        <p>Coming in the final PoE.</p>
+    </div>
+</div>
+
+<style>
+    .pillar-grid { display: flex; gap: 1rem; flex-wrap: wrap; }
+    .pillar-card { flex: 1; min-width: 220px; padding: 1.5rem; border-radius: 10px;
+        text-decoration: none; color: inherit; border: 1px solid #ccc; }
+    .pillar-card.active { background: #e8f5e9; border-color: #4caf50; cursor: pointer; }
+    .pillar-card.disabled { background: #f2f2f2; opacity: 0.6; }
+</style>

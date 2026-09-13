@@ -1,0 +1,236 @@
+﻿@page "/ingestion"
+@using SmartX.Shared
+@inject HttpClient Http
+@implements IDisposable
+
+<h2>📡 Sensor Data Ingestion & Telemetry</h2>
+
+<h4>Register a sensor</h4>
+<div class="form-row">
+    <input @bind="mac" placeholder="MAC Address (e.g. AA:BB:CC:01)" />
+    <input @bind="location" placeholder="Location (e.g. Zone 1)" />
+    <select @bind="category">
+        <option>Environmental</option>
+        <option>Power Consumption</option>
+        <option>Actuator</option>
+    </select>
+    <button @onclick="RegisterSensor">Register</button>
+</div>
+
+<h4>Validate deployment path (recursion demo)</h4>
+<div class="form-row">
+    <input @bind="pathInput" placeholder="Facility A/Zone 1/Sub-Zone B" style="width:320px" />
+    <button @onclick="ValidatePath">Validate</button>
+    @if (pathResult is not null)
+    {
+        <span class="@(pathResult == true ? "ok" : "bad")">
+            @(pathResult == true ? "✔ Valid path" : "✖ Invalid path")
+        </span>
+    }
+</div>
+
+<h4>Attach a config/log file</h4>
+<div class="form-row">
+    <InputFile OnChange="OnFileSelected" />
+    <select @bind="uploadTargetMac">
+        @foreach (var s in sensors)
+        {
+            <option value="@s.MacAddress">@s.MacAddress</option>
+        }
+    </select>
+    <button @onclick="UploadFile">Upload</button>
+</div>
+
+<hr />
+<h4>Live Sensor Health Pulse (dashboard engagement feature)</h4>
+<p><em>Each card pulses green→amber→red based on a live anomaly score (z-score of the latest reading vs. its own rolling average), instead of a static progress bar.</em></p>
+
+<div class="sensor-grid">
+    @foreach (var s in sensors)
+    {
+        var status = GetStatus(s);
+        <div class="sensor-card @status.CssClass">
+            <div class="pulse-dot @status.CssClass"></div>
+            <strong>@s.MacAddress</strong>
+            <div>@s.Location · @s.Category</div>
+            <div>Last reading: @(s.ProcessedReadings.Count > 0 ? s.ProcessedReadings[^1].ToString("F1") : "—")</div>
+            <div class="status-label">@status.Label</div>
+            <button @onclick="() => SimulateTelemetry(s.MacAddress)">Simulate reading</button>
+        </div>
+    }
+</div>
+
+<style>
+    .form-row {
+        display: flex;
+        gap: 0.5rem;
+        margin-bottom: 1rem;
+        align-items: center;
+    }
+
+    .ok {
+        color: green;
+    }
+
+    .bad {
+        color: red;
+    }
+
+    .sensor-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+    }
+
+    .sensor-card {
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        padding: 1rem;
+        width: 220px;
+        position: relative;
+    }
+
+    .pulse-dot {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        margin-bottom: 0.5rem;
+    }
+
+    .normal .pulse-dot, .normal {
+        border-color: #4caf50;
+    }
+
+        .normal .pulse-dot {
+            background: #4caf50;
+            animation: pulse 2s infinite;
+        }
+
+    .warning .pulse-dot, .warning {
+        border-color: #ff9800;
+    }
+
+        .warning .pulse-dot {
+            background: #ff9800;
+            animation: pulse 1s infinite;
+        }
+
+    .critical .pulse-dot, .critical {
+        border-color: #f44336;
+    }
+
+        .critical .pulse-dot {
+            background: #f44336;
+            animation: pulse 0.4s infinite;
+        }
+
+    @@keyframes pulse {
+        0% {
+            box-shadow: 0 0 0 0 currentColor;
+            opacity: 1;
+        }
+
+        70% {
+            box-shadow: 0 0 0 8px transparent;
+            opacity: 0.6;
+        }
+
+        100% {
+            box-shadow: 0 0 0 0 transparent;
+            opacity: 1;
+        }
+    }   
+</style>
+
+@code {
+    private string mac = "", location = "", category = "Environmental";
+    private string pathInput = "Facility A/Zone 1/Sub-Zone B";
+    private bool? pathResult;
+    private string uploadTargetMac = "";
+    private IBrowserFile? selectedFile;
+    private List<SensorProfile> sensors = new();
+    private PeriodicTimer? timer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshSensors();
+        timer = new PeriodicTimer(TimeSpan.FromSeconds(3));
+        _ = PollLoop();
+    }
+
+    private async Task PollLoop()
+    {
+        while (timer is not null && await timer.WaitForNextTickAsync())
+        {
+            await RefreshSensors();
+            StateHasChanged();
+        }
+    }
+
+    private async Task RefreshSensors()
+    {
+        var result = await Http.GetFromJsonAsync<List<SensorProfile>>("/api/sensors");
+        if (result is not null) sensors = result;
+    }
+
+    private async Task RegisterSensor()
+    {
+        if (string.IsNullOrWhiteSpace(mac)) return;
+        await Http.PostAsJsonAsync("/api/sensors", new SensorRegistrationRequest(mac, location, category));
+        mac = location = "";
+        await RefreshSensors();
+    }
+
+    private async Task ValidatePath()
+    {
+        var segments = pathInput.Split('/', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList();
+        var response = await Http.PostAsJsonAsync("/api/deployment/validate", new PathValidationRequest(segments));
+        var json = await response.Content.ReadFromJsonAsync<ValidationResponse>();
+        pathResult = json?.IsValid;
+    }
+
+    private void OnFileSelected(InputFileChangeEventArgs e) => selectedFile = e.File;
+
+    private async Task UploadFile()
+    {
+        if (selectedFile is null || string.IsNullOrWhiteSpace(uploadTargetMac)) return;
+        using var content = new MultipartFormDataContent();
+        var stream = selectedFile.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+        content.Add(new StreamContent(stream), "file", selectedFile.Name);
+        await Http.PostAsync($"/api/sensors/{uploadTargetMac}/upload", content);
+        await RefreshSensors();
+    }
+
+    private async Task SimulateTelemetry(string sensorMac)
+    {
+        var rnd = new Random();
+        // Occasionally simulate a spike so you can see the pulse go red in the demo
+        double value = rnd.NextDouble() < 0.15 ? rnd.Next(150, 300) : rnd.Next(20, 60);
+        await Http.PostAsJsonAsync($"/api/sensors/{sensorMac}/telemetry",
+            new TelemetryIngestRequest(sensorMac, value, "units"));
+        await RefreshSensors();
+    }
+
+    private (string CssClass, string Label) GetStatus(SensorProfile s)
+    {
+        var readings = s.ProcessedReadings;
+        if (readings.Count < 3) return ("normal", "Gathering baseline…");
+
+        var recent = readings.TakeLast(10).ToList();
+        double mean = recent.Average();
+        double stdDev = Math.Sqrt(recent.Sum(v => Math.Pow(v - mean, 2)) / recent.Count);
+        double last = recent[^1];
+        double z = stdDev == 0 ? 0 : Math.Abs(last - mean) / stdDev;
+
+        return z switch
+        {
+            > 2.5 => ("critical", "⚠ Anomaly detected"),
+            > 1.5 => ("warning", "Watch — drifting"),
+            _ => ("normal", "Nominal")
+        };
+    }
+
+    public void Dispose() => timer?.Dispose();
+
+    private record ValidationResponse(List<string> Path, bool IsValid);
+}
