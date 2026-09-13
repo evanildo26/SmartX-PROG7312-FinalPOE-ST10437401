@@ -199,7 +199,7 @@
         var stream = selectedFile.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
         content.Add(new StreamContent(stream), "file", selectedFile.Name);
         await Http.PostAsync($"/api/sensors/{uploadTargetMac}/upload", content);
-        await RefreshSensors();
+        await RefreshSensors(); // Refresh the sensor list after upload
     }
 
     private async Task SimulateTelemetry(string sensorMac)
