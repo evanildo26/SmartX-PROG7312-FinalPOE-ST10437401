@@ -35,3 +35,7 @@ public class PowerReading
     public override int GetHashCode() => Watts.GetHashCode();
     public override string ToString() => $"{SensorId}: {Watts:F1}W";
 }
+
+
+// Compare this snippet from SmartX.Shared/TelemetryPacket.cs:
+//---------------------------------------------End-------------------------------------------//
