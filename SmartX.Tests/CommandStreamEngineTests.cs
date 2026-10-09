@@ -313,4 +313,16 @@ public class CommandStreamEngineTests
             .ToList();
         Assert.Null(TrendForecaster.Forecast(device, points));
     }
+
+    [Fact]
+    public void Injected_critical_reading_uses_the_priority_lane()
+    {
+        var engine = NewEngine();
+        var ack = engine.InjectCritical(Moisture);
+
+        Assert.NotNull(ack);
+        Assert.Equal(QueueLane.Priority, ack!.Lane);
+        Assert.Equal(AlertSeverity.Critical, ack.Severity);
+        Assert.Null(engine.InjectCritical(Pump));   // actuators have no reading to inject
+    }
 }
