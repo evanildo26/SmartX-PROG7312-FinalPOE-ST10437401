@@ -355,4 +355,16 @@ public class CommandStreamEngineTests
         Assert.False(result.Success);
         Assert.Equal(0, engine.GetStats().UndoDepth);   // nothing pushed onto the stack
     }
+
+    [Fact]
+    public void Toggle_flips_the_actuator_state()
+    {
+        var engine = NewEngine();
+
+        engine.IssueCommand(new DeviceCommandRequest(Pump, "TOGGLE"));
+        Assert.True(engine.GetDevice(Pump)!.ActuatorOn);
+
+        engine.IssueCommand(new DeviceCommandRequest(Pump, "TOGGLE"));
+        Assert.False(engine.GetDevice(Pump)!.ActuatorOn);
+    }
 }
