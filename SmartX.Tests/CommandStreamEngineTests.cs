@@ -325,4 +325,17 @@ public class CommandStreamEngineTests
         Assert.Equal(AlertSeverity.Critical, ack.Severity);
         Assert.Null(engine.InjectCritical(Pump));   // actuators have no reading to inject
     }
+
+    [Fact]
+    public void Seeded_operator_history_appears_as_learned_patterns()
+    {
+        var engine = new CommandStreamEngine(new ActionPatternEngine(), () => _now);
+        FleetSeeder.Seed(engine, _now);
+
+        var rule = engine.GetLearnedPatterns()
+            .First(p => p.TriggerLabel == "Moisture Sensor B: moisture low" && p.ActionLabel == "Turn ON Pump A");
+
+        Assert.Equal(5, rule.Count);
+        Assert.Equal(6, rule.TriggerOccurrences);
+    }
 }
