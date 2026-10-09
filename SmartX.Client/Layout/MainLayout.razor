@@ -1,0 +1,104 @@
+@inherits LayoutComponentBase
+@implements IDisposable
+@inject StreamStateService State
+@inject NavigationManager Nav
+
+<div class="page">
+    <div class="sidebar">
+        <NavMenu />
+    </div>
+
+    <main>
+        <div class="top-row px-4">
+            <div class="top-left">
+                <span class="gateway-name">Smart-X Gateway</span>
+                <span class="muted small hide-sm">@State.ApiBase</span>
+            </div>
+            <div class="top-right">
+                @if (State.Snapshot is { } snap && snap.Stats.ActiveAlertCount > 0)
+                {
+                    <a class="alert-chip @(snap.Stats.CriticalAlertCount > 0 ? "critical" : "warning")" href="command-stream">
+                        @snap.Stats.ActiveAlertCount active alert@(snap.Stats.ActiveAlertCount == 1 ? "" : "s")
+                    </a>
+                }
+                <span class="link-pill @LinkClass" title="Real-time link to the gateway API">
+                    <span class="link-dot"></span>@LinkText
+                </span>
+            </div>
+        </div>
+
+        <article class="content px-4">
+            @Body
+        </article>
+    </main>
+</div>
+
+@* Global toasts: critical alerts surface on every page, not just the Command Stream. *@
+<div class="toast-stack" aria-live="polite">
+    @foreach (var toast in State.Toasts)
+    {
+        <div class="toast-card @(toast.Severity == AlertSeverity.Critical ? "critical" : "warning")">
+            <div class="toast-body" @onclick="() => OpenToast(toast)">
+                <strong>🚨 @toast.Title</strong>
+                <span>@toast.Message</span>
+            </div>
+            <button class="toast-close" title="Dismiss" @onclick="() => State.DismissToast(toast.Id)">×</button>
+        </div>
+    }
+</div>
+
+@code {
+    private PeriodicTimer? _ageTimer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        State.Changed += OnStateChanged;
+        // Started once for the whole session — navigating between pages never reconnects.
+        await State.EnsureStartedAsync();
+        _ageTimer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        _ = TickAsync();
+    }
+
+    private async Task TickAsync()
+    {
+        // Re-render once a second so "updated Ns ago" stays honest even if pushes stop.
+        while (_ageTimer is not null && await _ageTimer.WaitForNextTickAsync())
+            await InvokeAsync(StateHasChanged);
+    }
+
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    private string LinkClass => State.Link switch
+    {
+        LinkState.Live when Age > 5 => "stale",
+        LinkState.Live => "live",
+        LinkState.Polling => "polling",
+        LinkState.Reconnecting or LinkState.Connecting => "reconnecting",
+        _ => "offline"
+    };
+
+    private double Age => State.LastUpdateUtc is { } t ? (DateTime.UtcNow - t).TotalSeconds : double.MaxValue;
+
+    private string LinkText => State.Link switch
+    {
+        LinkState.Live => Age < 2 ? "Live" : $"Live · {Age:0}s ago",
+        LinkState.Polling => "Polling (SignalR unavailable)",
+        LinkState.Reconnecting => "Reconnecting…",
+        LinkState.Connecting => "Connecting…",
+        _ => "API offline — retrying"
+    };
+
+    private async Task OpenToast(UiToast toast)
+    {
+        State.DismissToast(toast.Id);
+        await State.SelectDeviceAsync(toast.MacAddress);
+        Nav.NavigateTo("command-stream");
+    }
+
+    public void Dispose()
+    {
+        State.Changed -= OnStateChanged;
+        _ageTimer?.Dispose();
+        _ageTimer = null;
+    }
+}
