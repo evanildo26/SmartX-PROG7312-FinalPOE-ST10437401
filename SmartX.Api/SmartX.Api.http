@@ -1,7 +1,8 @@
-# Smart-X Part 2 — manual API tests (Visual Studio / VS Code REST Client / Rider)
+# Smart-X Part 2 - manual API tests (Visual Studio / VS Code REST Client / Rider)
 @api = http://localhost:5261
 @pumpA = 24:6F:28:C3:00:20
 @moistureB = 24:6F:28:A1:00:02
+@meterMain = 24:6F:28:B2:00:10
 
 ### Health
 GET {{api}}/api/health
@@ -11,54 +12,76 @@ GET {{api}}/api/stream/devices/{{moistureB}}
 
 ### 2. Search / filter (category index + alert state). log=true teaches the predictive engine
 GET {{api}}/api/stream/devices?category=Actuator
+###
 GET {{api}}/api/stream/devices?state=alerting
+###
 GET {{api}}/api/stream/devices?q=pump&log=true
 
-### 3. Device uplink → standard Queue (normal reading)
+### 3. Device uplink -> standard Queue (normal reading)
 POST {{api}}/api/stream/ingest
 Content-Type: application/json
 
 { "macAddress": "{{moistureB}}", "value": 41.5 }
 
-### 4. Device uplink → PriorityQueue (critical moisture drop bypasses the queue)
+### 4. Device uplink -> PriorityQueue (critical moisture drop bypasses the queue)
 POST {{api}}/api/stream/ingest
 Content-Type: application/json
 
 { "macAddress": "{{moistureB}}", "value": 9.0 }
 
-### 5. Flood 600 routine packets THEN one critical packet — critical is processed first
+### 5. Power surge on the main meter -> PriorityQueue
+POST {{api}}/api/stream/ingest
+Content-Type: application/json
+
+{ "macAddress": "{{meterMain}}", "value": 4600 }
+
+### 6. Flood 600 routine packets THEN one critical packet - critical is processed first
 POST {{api}}/api/stream/simulate/burst
 Content-Type: application/json
 
 { "standardCount": 600, "includeCritical": true, "criticalMac": "{{moistureB}}" }
 
-### 6. Inspect processed order, lanes and latency
+### 7. Inject one critical reading for a device
+POST {{api}}/api/stream/simulate/critical/{{moistureB}}
+
+### 8. Inspect processed order, lanes and latency
 GET {{api}}/api/stream/snapshot
 
-### 7. Manual override → pushed onto the undo Stack
+### 9. Queue and alert statistics only
+GET {{api}}/api/stream/stats
+
+### 10. Manual override -> pushed onto the undo Stack
 POST {{api}}/api/stream/commands
 Content-Type: application/json
 
 { "macAddress": "{{pumpA}}", "action": "ON" }
 
-### 8. Bulk override: shut down all valves (ONE stack entry)
+### 11. Bulk override: shut down all valves (ONE stack entry)
 POST {{api}}/api/stream/commands/bulk
 Content-Type: application/json
 
 { "action": "OFF", "nameContains": "Valve", "label": "Shut down all valves" }
 
-### 9. Undo (Stack.Pop) / Redo
+### 12. Undo (Stack.Pop) / Redo
 POST {{api}}/api/stream/commands/undo
 ###
 POST {{api}}/api/stream/commands/redo
 
-### 10. Device downlink: Pump A collects its pending commands
+### 13. Command history
+GET {{api}}/api/stream/commands
+
+### 14. Device downlink: Pump A collects its pending commands
 GET {{api}}/api/stream/outbox/{{pumpA}}
 
-### 11. SortedDictionary timeline (time-ordered)
+### 15. SortedDictionary timeline (time-ordered)
 GET {{api}}/api/stream/devices/{{moistureB}}/timeline?minutes=5
 
-### 12. Predictive engine
+### 16. Alerts (HashSet) and alert history
+GET {{api}}/api/stream/alerts
+###
+GET {{api}}/api/stream/alerts/history
+
+### 17. Predictive engine
 GET {{api}}/api/stream/suggestions
 ###
 GET {{api}}/api/stream/patterns
