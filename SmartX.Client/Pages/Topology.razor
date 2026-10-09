@@ -1,0 +1,56 @@
+@page "/topology"
+@implements IDisposable
+@inject StreamStateService State
+
+<PageTitle>Network Topology · Smart-X</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>Network Topology &amp; Mesh Routing</h1>
+        <p class="muted">Scheduled for the final PoE: graph model of the mesh, BFS/DFS reachability, Prim's/Kruskal's MST
+            and a tree-indexed telemetry history. Below is a live preview of the node inventory it will route.</p>
+    </div>
+    <span class="tag-upcoming">Final PoE</span>
+</div>
+
+@if (State.Snapshot is null)
+{
+    <div class="panel empty-state"><p>Waiting for the gateway…</p></div>
+}
+else
+{
+    <div class="zone-grid">
+        @foreach (var zone in State.Snapshot.Devices.GroupBy(d => ZoneOf(d.Location)).OrderBy(g => g.Key))
+        {
+            <section class="panel zone">
+                <header class="panel-head"><h2>@zone.Key</h2><span class="muted small">@zone.Count() nodes</span></header>
+                <ul class="node-list">
+                    @foreach (var d in zone.OrderBy(n => n.DisplayName))
+                    {
+                        <li>
+                            <span class="dot @(d.IsOnline ? "normal" : "offline")"></span>
+                            <span>@d.DisplayName</span>
+                            <code>@d.MacAddress</code>
+                        </li>
+                    }
+                </ul>
+            </section>
+        }
+    </div>
+}
+
+@code {
+    private static string ZoneOf(string location)
+    {
+        var parts = location.Split('/', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 ? parts[1] : (parts.FirstOrDefault() ?? "Unassigned");
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        State.Changed += OnChanged;
+        await State.EnsureStartedAsync();
+    }
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => State.Changed -= OnChanged;
+}

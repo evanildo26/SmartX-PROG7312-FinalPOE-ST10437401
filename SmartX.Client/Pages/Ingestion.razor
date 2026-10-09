@@ -1,0 +1,228 @@
+@page "/ingestion"
+@using System.Text.RegularExpressions
+@inject HttpClient Http
+@inject IngestionState Form
+@implements IDisposable
+
+<PageTitle>Ingestion · Smart-X</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>Sensor Data Ingestion &amp; Telemetry</h1>
+        <p class="muted">Register devices, push telemetry, validate deployment paths and attach configuration logs.
+            Sensors registered here also join the live Command Stream registry.</p>
+    </div>
+</div>
+
+@if (Form.Message is not null)
+{
+    <div class="notice @(Form.MessageIsError ? "error" : "ok")">@Form.Message</div>
+}
+
+<div class="ingest-grid">
+    <section class="panel">
+        <h2>Register a sensor</h2>
+        <div class="form-row">
+            <input @bind="Form.Mac" @bind:event="oninput" placeholder="MAC address (e.g. AA:BB:CC:01)"
+                   class="@(MacValid || Form.Mac.Length == 0 ? "" : "invalid")" aria-label="MAC address" />
+            <input @bind="Form.Location" placeholder="Location (e.g. Facility A/Zone 1)" aria-label="Location" />
+            <select @bind="Form.Category" aria-label="Category">
+                @foreach (var c in DeviceCategories.All)
+                {
+                    <option value="@c">@c</option>
+                }
+            </select>
+            <button class="btn btn-primary" disabled="@(!MacValid)" @onclick="RegisterSensor">Register</button>
+        </div>
+        @if (!MacValid && Form.Mac.Length > 0)
+        {
+            <p class="field-hint">Use hex pairs separated by ':' or '-', e.g. AA:BB:CC:01 or 24:6F:28:A1:00:07.</p>
+        }
+    </section>
+
+    <section class="panel">
+        <h2>Validate deployment path <span class="muted small">(recursion)</span></h2>
+        <div class="form-row">
+            <input @bind="Form.PathInput" placeholder="Facility A/Zone 1/Sub-Zone B" aria-label="Deployment path" />
+            <button class="btn btn-primary" @onclick="ValidatePath">Validate</button>
+            @if (Form.PathResult is not null)
+            {
+                <span class="@(Form.PathResult == true ? "ok-text" : "crit-text")">
+                    @(Form.PathResult == true ? "✔ Valid path" : "✖ Invalid path")
+                </span>
+            }
+        </div>
+    </section>
+
+    <section class="panel">
+        <h2>Attach a config/log file</h2>
+        <div class="form-row">
+            <InputFile OnChange="OnFileSelected" />
+            <select @bind="Form.UploadTargetMac" aria-label="Upload target">
+                <option value="">Choose sensor…</option>
+                @foreach (var s in Form.Sensors)
+                {
+                    <option value="@s.MacAddress">@s.MacAddress</option>
+                }
+            </select>
+            <button class="btn btn-primary" disabled="@(selectedFile is null || Form.UploadTargetMac.Length == 0)" @onclick="UploadFile">Upload</button>
+        </div>
+    </section>
+</div>
+
+<section class="panel">
+    <h2>Live Sensor Health Pulse</h2>
+    <p class="muted small">Each card pulses green → amber → red from a live anomaly score (z-score of the latest reading against its own rolling average).</p>
+
+    @if (Form.Sensors.Count == 0)
+    {
+        <p class="muted">No manually registered sensors yet — register one above. (The seeded ESP32 fleet lives on the Command Stream page.)</p>
+    }
+    <div class="sensor-grid">
+        @foreach (var s in Form.Sensors)
+        {
+            var status = GetStatus(s);
+            <div class="sensor-card @status.CssClass">
+                <div class="pulse-dot @status.CssClass"></div>
+                <strong>@s.MacAddress</strong>
+                <div>@s.Location · @s.Category</div>
+                <div>Last reading: @(s.ProcessedReadings.Count > 0 ? s.ProcessedReadings[^1].ToString("F1") : "—")</div>
+                <div class="status-label">@status.Label</div>
+                <div class="muted small">@s.AttachedFiles.Count file(s) attached</div>
+                <button class="btn btn-outline btn-sm" @onclick="() => SimulateTelemetry(s.MacAddress)">Simulate reading</button>
+            </div>
+        }
+    </div>
+</section>
+
+@code {
+    private static readonly Regex MacPattern = new(@"^([0-9A-Fa-f]{2}[:-]){3,7}[0-9A-Fa-f]{2}$", RegexOptions.Compiled);
+    private IBrowserFile? selectedFile;
+    private PeriodicTimer? timer;
+
+    private bool MacValid => MacPattern.IsMatch(Form.Mac.Trim());
+
+    protected override async Task OnInitializedAsync()
+    {
+        await RefreshSensors();
+        timer = new PeriodicTimer(TimeSpan.FromSeconds(3));
+        _ = PollLoop();
+    }
+
+    private async Task PollLoop()
+    {
+        while (timer is not null && await timer.WaitForNextTickAsync())
+        {
+            await RefreshSensors();
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task RefreshSensors()
+    {
+        try
+        {
+            var result = await Http.GetFromJsonAsync<List<SensorProfile>>("/api/sensors");
+            if (result is not null) Form.Sensors = result;
+        }
+        catch
+        {
+            // API temporarily unreachable: keep showing the last known list instead of crashing.
+        }
+    }
+
+    private void Notify(string message, bool error = false)
+    {
+        Form.Message = message;
+        Form.MessageIsError = error;
+    }
+
+    private async Task RegisterSensor()
+    {
+        if (!MacValid) return;
+        try
+        {
+            var mac = Form.Mac.Trim().ToUpperInvariant();
+            var response = await Http.PostAsJsonAsync("/api/sensors", new SensorRegistrationRequest(mac, Form.Location.Trim(), Form.Category));
+            if (response.IsSuccessStatusCode)
+            {
+                Notify($"Registered {mac}. It is now also visible on the Command Stream.");
+                Form.Mac = Form.Location = "";
+                await RefreshSensors();
+            }
+            else Notify($"Registration failed ({(int)response.StatusCode}).", true);
+        }
+        catch (Exception ex) { Notify($"Gateway unreachable: {ex.Message}", true); }
+    }
+
+    private async Task ValidatePath()
+    {
+        try
+        {
+            var segments = Form.PathInput.Split('/', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToList();
+            var response = await Http.PostAsJsonAsync("/api/deployment/validate", new PathValidationRequest(segments));
+            var json = await response.Content.ReadFromJsonAsync<ValidationResponse>();
+            Form.PathResult = json?.IsValid;
+        }
+        catch (Exception ex) { Notify($"Gateway unreachable: {ex.Message}", true); }
+    }
+
+    private void OnFileSelected(InputFileChangeEventArgs e) => selectedFile = e.File;
+
+    private async Task UploadFile()
+    {
+        if (selectedFile is null || string.IsNullOrWhiteSpace(Form.UploadTargetMac)) return;
+        try
+        {
+            using var content = new MultipartFormDataContent();
+            var stream = selectedFile.OpenReadStream(maxAllowedSize: 10 * 1024 * 1024);
+            content.Add(new StreamContent(stream), "file", selectedFile.Name);
+            var response = await Http.PostAsync($"/api/sensors/{Uri.EscapeDataString(Form.UploadTargetMac)}/upload", content);
+            Notify(response.IsSuccessStatusCode ? $"Uploaded {selectedFile.Name} to {Form.UploadTargetMac}." : $"Upload failed ({(int)response.StatusCode}).",
+                   !response.IsSuccessStatusCode);
+            await RefreshSensors();
+        }
+        catch (Exception ex) { Notify($"Upload failed: {ex.Message}", true); }
+    }
+
+    private async Task SimulateTelemetry(string sensorMac)
+    {
+        var rnd = new Random();
+        // Occasionally simulate a spike so you can see the pulse go red in the demo
+        double value = rnd.NextDouble() < 0.15 ? rnd.Next(150, 300) : rnd.Next(20, 60);
+        try
+        {
+            await Http.PostAsJsonAsync($"/api/sensors/{Uri.EscapeDataString(sensorMac)}/telemetry",
+                new TelemetryIngestRequest(sensorMac, value, "units"));
+        }
+        catch (Exception ex) { Notify($"Gateway unreachable: {ex.Message}", true); }
+        await RefreshSensors();
+    }
+
+    private (string CssClass, string Label) GetStatus(SensorProfile s)
+    {
+        var readings = s.ProcessedReadings;
+        if (readings.Count < 3) return ("normal", "Gathering baseline…");
+
+        var recent = readings.TakeLast(10).ToList();
+        double mean = recent.Average();
+        double stdDev = Math.Sqrt(recent.Sum(v => Math.Pow(v - mean, 2)) / recent.Count);
+        double last = recent[^1];
+        double z = stdDev == 0 ? 0 : Math.Abs(last - mean) / stdDev;
+
+        return z switch
+        {
+            > 2.5 => ("critical", "⚠ Anomaly detected"),
+            > 1.5 => ("warning", "Watch — drifting"),
+            _ => ("normal", "Nominal")
+        };
+    }
+
+    public void Dispose()
+    {
+        timer?.Dispose();
+        timer = null;
+    }
+
+    private record ValidationResponse(List<string> Path, bool IsValid);
+}

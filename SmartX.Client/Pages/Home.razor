@@ -1,0 +1,53 @@
+@page "/"
+@implements IDisposable
+@inject StreamStateService State
+
+<PageTitle>Smart-X Control Centre</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>Smart-X IoT Mesh Ecosystem</h1>
+        <p class="muted">Gateway control centre for the hydroponic farm and smart-grid fleet.</p>
+    </div>
+</div>
+
+<div class="pillar-grid">
+    <a class="pillar-card active" href="ingestion">
+        <span class="pillar-step">Pillar 1 · Part 1</span>
+        <h3>📡 Sensor Data Ingestion &amp; Telemetry</h3>
+        <p>Register devices, push telemetry, validate deployment paths and attach configuration logs.</p>
+        <span class="pillar-cta">Open →</span>
+    </a>
+
+    <a class="pillar-card active live" href="command-stream">
+        <span class="pillar-step">Pillar 2 · Part 2</span>
+        <h3>⏱ Real-Time Command Stream &amp; History</h3>
+        <p>Priority-queued telemetry, manual overrides with undo, live alerts and predictive suggestions.</p>
+        @if (State.Snapshot is { } snap)
+        {
+            <div class="pillar-stats">
+                <span><strong>@snap.Stats.DevicesOnline</strong>/@snap.Stats.DevicesTotal online</span>
+                <span class="@(snap.Stats.CriticalAlertCount > 0 ? "crit-text" : "")"><strong>@snap.Stats.ActiveAlertCount</strong> alerts</span>
+                <span><strong>@snap.Suggestions.Count</strong> suggestions</span>
+            </div>
+        }
+        <span class="pillar-cta">Open →</span>
+    </a>
+
+    <a class="pillar-card upcoming" href="topology">
+        <span class="pillar-step">Pillar 3 · Final PoE</span>
+        <h3>🕸 Network Topology &amp; Mesh Routing</h3>
+        <p>Graph of mesh links, BFS/DFS reachability and a minimum spanning tree for power-efficient routing.</p>
+        <span class="pillar-cta">Preview →</span>
+    </a>
+</div>
+
+@code {
+    protected override async Task OnInitializedAsync()
+    {
+        State.Changed += OnChanged;
+        await State.EnsureStartedAsync();
+    }
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+    public void Dispose() => State.Changed -= OnChanged;
+}
