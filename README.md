@@ -24,7 +24,7 @@ Smart-X is a simulated IoT gateway for a fleet of ESP32 microcontrollers in a hy
 | `SmartX.Client` | **Blazor WebAssembly** dashboard. Receives live data over SignalR; sends commands over REST. |
 | `SmartX.Shared` | Contracts shared by every project (`TelemetryPacket<T>`, `LiveDevice`, `StreamSnapshot`, …). |
 | `SmartX.Simulator` | **ESP32 fleet emulator**. Each device POSTs readings over HTTP and polls its command outbox, exactly as hardware would. |
-| `SmartX.Tests` | 21 xUnit tests proving each data structure behaves correctly. |
+| `SmartX.Tests` | 24 xUnit tests proving each data structure behaves correctly. |
 
 ```
 ESP32 fleet (Simulator) ──HTTP POST /api/stream/ingest──▶ ┌──────────────── SmartX.Api ────────────────┐
@@ -81,7 +81,7 @@ Open **https://localhost:7192** and choose **Real-Time Command Stream**.
 dotnet test SmartX.Tests
 ```
 
-The 21 tests cover queue bypass, FIFO order, LIFO undo, bulk undo, redo clearing, outbox order, case-insensitive MAC lookup, the category index, timeline ordering and capacity, duplicate alert and disconnect suppression, learning of operator patterns, the learned-patterns report, injected critical readings, and trend forecasting.
+The 24 tests cover queue bypass, FIFO order, LIFO undo, bulk undo, redo clearing, outbox order, case-insensitive MAC lookup, the category index, timeline ordering and capacity, duplicate alert and disconnect suppression, learning of operator patterns, the learned-patterns report, injected critical readings, toggle and empty-undo handling, and trend forecasting.
 
 ---
 
