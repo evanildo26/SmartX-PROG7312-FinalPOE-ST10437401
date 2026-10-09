@@ -338,4 +338,21 @@ public class CommandStreamEngineTests
         Assert.Equal(5, rule.Count);
         Assert.Equal(6, rule.TriggerOccurrences);
     }
+
+    [Fact]
+    public void Redo_with_nothing_to_redo_is_handled()
+    {
+        var engine = NewEngine();
+        Assert.False(engine.Redo().Success);
+    }
+
+    [Fact]
+    public void Bulk_command_with_nothing_to_change_is_rejected()
+    {
+        var engine = NewEngine();   // all valves start OFF
+        var result = engine.IssueBulkCommand(new BulkCommandRequest("OFF", "Valve", "Shut down all valves"));
+
+        Assert.False(result.Success);
+        Assert.Equal(0, engine.GetStats().UndoDepth);   // nothing pushed onto the stack
+    }
 }
