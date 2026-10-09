@@ -24,7 +24,7 @@ Smart-X is a simulated IoT gateway for a fleet of ESP32 microcontrollers in a hy
 | `SmartX.Client` | **Blazor WebAssembly** dashboard. Receives live data over SignalR; sends commands over REST. |
 | `SmartX.Shared` | Contracts shared by every project (`TelemetryPacket<T>`, `LiveDevice`, `StreamSnapshot`, …). |
 | `SmartX.Simulator` | **ESP32 fleet emulator**. Each device POSTs readings over HTTP and polls its command outbox, exactly as hardware would. |
-| `SmartX.Tests` | xUnit tests proving each data structure behaves correctly. |
+| `SmartX.Tests` | 21 xUnit tests proving each data structure behaves correctly. |
 
 ```
 ESP32 fleet (Simulator) ──HTTP POST /api/stream/ingest──▶ ┌──────────────── SmartX.Api ────────────────┐
@@ -55,7 +55,7 @@ dotnet build SmartX.slnx
 # 2. Trust the HTTPS development certificate (first time only)
 dotnet dev-certs https --trust
 
-# 3. Terminal 1 — gateway API (http://localhost:5261 and http://localhost:5261)
+# 3. Terminal 1 — gateway API (https://localhost:7290 and http://localhost:5261)
 dotnet run --project SmartX.Api --launch-profile https
 
 # 4. Terminal 2 — ESP32 fleet simulator (talks to http://localhost:5261 by default)
@@ -67,7 +67,7 @@ dotnet run --project SmartX.Client --launch-profile https
 
 Open **https://localhost:7192** and choose **Real-Time Command Stream**.
 
-> The client reads the API address from `SmartX.Client/wwwroot/appsettings.json` (`ApiBaseUrl`). If your API runs on a different port, change it there; no recompile is needed.
+> The client reads the API address from `SmartX.Client/wwwroot/appsettings.json` (`ApiBaseUrl`, default `http://localhost:5261`, which both the `http` and `https` API profiles listen on). If your API runs on a different port, change it there; no recompile is needed.
 
 ## Quick start (Visual Studio)
 
@@ -81,7 +81,7 @@ Open **https://localhost:7192** and choose **Real-Time Command Stream**.
 dotnet test SmartX.Tests
 ```
 
-The 19 tests cover queue bypass, FIFO order, LIFO undo, bulk undo, redo clearing, outbox order, case-insensitive MAC lookup, the category index, timeline ordering and capacity, duplicate alert and disconnect suppression, learning of operator patterns, and trend forecasting.
+The 21 tests cover queue bypass, FIFO order, LIFO undo, bulk undo, redo clearing, outbox order, case-insensitive MAC lookup, the category index, timeline ordering and capacity, duplicate alert and disconnect suppression, learning of operator patterns, the learned-patterns report, injected critical readings, and trend forecasting.
 
 ---
 
@@ -224,7 +224,16 @@ Part 1 endpoints (`/api/sensors`, `/api/deployment/validate`, `/api/power/aggreg
 
 | Symptom | Fix |
 |---|---|
-| Top bar says **API offline** | Start `SmartX.Api` with `--launch-profile https`, or point `ApiBaseUrl` at the port it prints. |
+| Top bar says **API offline** | Make sure `SmartX.Api` is running and its console shows `Now listening on: http://localhost:5261`; otherwise point `ApiBaseUrl` at the port it prints. |
 | All devices go grey after ~8 s | The simulator isn't running. Start `SmartX.Simulator`. |
 | Certificate errors | `dotnet dev-certs https --trust`, then restart the browser. |
 | Simulator says "waiting for gateway" | It defaults to `http://localhost:5261`. Pass another URL: `dotnet run --project SmartX.Simulator http://localhost:5000`. |
+
+## Submission
+
+| Item | Link |
+|---|---|
+| Repository | https://github.com/evanildo26/SmartX-PROG7312 |
+| Video demo | [add YouTube link] |
+| Feedback ledger | [FEEDBACK.md](FEEDBACK.md) |
+| Author | Evanildo Julio Chaves Jose (ST10437401) |
