@@ -1,0 +1,441 @@
+@page "/command-stream"
+@implements IDisposable
+@inject StreamStateService State
+
+<PageTitle>Command Stream · Smart-X</PageTitle>
+
+<div class="page-head">
+    <div>
+        <h1>Real-Time Command Stream &amp; History</h1>
+        <p class="muted">Live telemetry from the ESP32 mesh, manual overrides with undo, and predictive suggestions.</p>
+    </div>
+    <div class="head-actions">
+        <button class="btn btn-outline" disabled="@_busy" @onclick="RunBurst"
+                title="Queues 600 routine packets, then one critical packet, to prove the priority lane bypasses the backlog">
+            ⚡ Burst test: 600 packets + 1 critical
+        </button>
+    </div>
+</div>
+
+@if (Snap is null)
+{
+    <div class="panel empty-state">
+        <h3>Connecting to the gateway…</h3>
+        <p>Waiting for <code>@State.ApiBase</code>. Start <strong>SmartX.Api</strong> (and <strong>SmartX.Simulator</strong> for live device traffic).</p>
+    </div>
+}
+else
+{
+    var s = Snap.Stats;
+
+    @* ---------------- KPI strip ---------------- *@
+    <section class="kpis">
+        <div class="kpi @(s.DisconnectedCount > 0 ? "warn" : "")">
+            <span class="kpi-label">Devices online</span>
+            <span class="kpi-value">@s.DevicesOnline<small>/@s.DevicesTotal</small></span>
+            <span class="kpi-sub">@s.DisconnectedCount in disconnected set</span>
+        </div>
+        <div class="kpi @(s.CriticalAlertCount > 0 ? "crit" : s.ActiveAlertCount > 0 ? "warn" : "")">
+            <span class="kpi-label">Active alerts</span>
+            <span class="kpi-value">@s.ActiveAlertCount</span>
+            <span class="kpi-sub">@s.CriticalAlertCount critical</span>
+        </div>
+        <div class="kpi">
+            <span class="kpi-label">Standard queue</span>
+            <span class="kpi-value">@s.StandardQueueDepth</span>
+            <span class="kpi-sub">FIFO · avg wait @Ms(s.AvgStandardLatencyMs)</span>
+        </div>
+        <div class="kpi @(s.PriorityQueueDepth > 0 ? "crit" : "")">
+            <span class="kpi-label">Priority lane</span>
+            <span class="kpi-value">@s.PriorityQueueDepth</span>
+            <span class="kpi-sub">avg wait @Ms(s.AvgPriorityLatencyMs) · @s.PriorityProcessed handled</span>
+        </div>
+        <div class="kpi">
+            <span class="kpi-label">Packets processed</span>
+            <span class="kpi-value">@s.TotalProcessed.ToString("N0")</span>
+            <span class="kpi-sub">since gateway start</span>
+        </div>
+        <div class="kpi good">
+            <span class="kpi-label">Duplicates blocked</span>
+            <span class="kpi-value">@((s.DuplicateAlertsSuppressed + s.DuplicateDisconnectsSuppressed).ToString("N0"))</span>
+            <span class="kpi-sub">@s.DuplicateAlertsSuppressed.ToString("N0") alerts · @s.DuplicateDisconnectsSuppressed.ToString("N0") disconnects</span>
+        </div>
+    </section>
+
+    @* ---------------- Predictive engine ---------------- *@
+    <section class="panel suggestions">
+        <header class="panel-head">
+            <div>
+                <h2>Suggested Actions &amp; Automated Insights</h2>
+                <p class="muted small">Learned from operator history, live alerts and trend forecasts, then ranked with a priority queue.</p>
+            </div>
+            <button class="btn btn-ghost" @onclick="TogglePatterns">@(_showPatterns ? "Hide" : "Show") learned patterns</button>
+        </header>
+
+        @if (Snap.Suggestions.Count == 0)
+        {
+            <p class="muted">No recommendations right now — every monitored device is within its limits.</p>
+        }
+        else
+        {
+            <div class="suggest-grid">
+                @foreach (var sg in Snap.Suggestions)
+                {
+                    int pct = (int)Math.Round(sg.Confidence * 100);
+                    <article class="suggest @(sg.CommandAction is null ? "insight" : "action")">
+                        <div class="suggest-top">
+                            <span class="tag">@sg.Kind</span>
+                            <span class="src">@sg.Source</span>
+                        </div>
+                        <h3>@sg.Title</h3>
+                        <p>@sg.Reason</p>
+                        <div class="suggest-foot">
+                            <div class="confidence" title="Confidence @pct%">
+                                <div class="meter"><span style="width:@(pct.ToString(CultureInfo.InvariantCulture))%"></span></div>
+                                <small>@pct% confidence</small>
+                            </div>
+                            @if (sg.CommandAction is not null && sg.TargetMac is not null)
+                            {
+                                <button class="btn btn-primary btn-sm" disabled="@_busy"
+                                        @onclick="() => RunSuggestion(sg)">Run now</button>
+                            }
+                            else if (sg.TargetMac is not null)
+                            {
+                                <button class="btn btn-ghost btn-sm" @onclick="() => State.SelectDeviceAsync(sg.TargetMac)">Show device</button>
+                            }
+                        </div>
+                    </article>
+                }
+            </div>
+        }
+
+        @if (_showPatterns)
+        {
+            <div class="patterns">
+                <h3>What the engine has learned <span class="muted small">(trigger → operator response, confidence = count ÷ trigger occurrences)</span></h3>
+                @if (State.LearnedPatterns is null)
+                {
+                    <p class="muted">Loading…</p>
+                }
+                else
+                {
+                    <div class="table-wrap">
+                        <table class="data">
+                            <thead><tr><th>When this happens</th><th>Operators did</th><th>Seen</th><th>Confidence</th></tr></thead>
+                            <tbody>
+                                @foreach (var p in State.LearnedPatterns.Take(15))
+                                {
+                                    <tr>
+                                        <td>@p.TriggerLabel</td>
+                                        <td>@p.ActionLabel</td>
+                                        <td>@p.Count / @p.TriggerOccurrences</td>
+                                        <td>@((p.Confidence * 100).ToString("0"))%</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+        }
+    </section>
+
+    <div class="stream-grid">
+        @* ---------------- Devices + search ---------------- *@
+        <section class="panel devices-panel">
+            <header class="panel-head">
+                <h2>Devices</h2>
+                <span class="muted small">@Visible.Count of @Snap.Devices.Count shown</span>
+            </header>
+
+            <div class="filters">
+                <input type="search" placeholder="Search name, MAC or zone…" value="@State.SearchText"
+                       @oninput="OnSearchInput" aria-label="Search devices" />
+                <select value="@State.CategoryFilter" @onchange="OnCategoryChanged" aria-label="Category">
+                    <option value="">All categories</option>
+                    @foreach (var c in DeviceCategories.All)
+                    {
+                        <option value="@c">@c</option>
+                    }
+                </select>
+                <select value="@State.StateFilter" @onchange="OnStateChanged" aria-label="Alert state">
+                    <option value="">Any state</option>
+                    <option value="alerting">Has active alert</option>
+                    <option value="critical">Critical</option>
+                    <option value="warning">Warning</option>
+                    <option value="normal">Normal</option>
+                    <option value="offline">Offline</option>
+                </select>
+                @if (State.FilterActive)
+                {
+                    <button class="btn btn-ghost btn-sm" @onclick="State.ClearFiltersAsync">Clear</button>
+                }
+            </div>
+
+            @if (Visible.Count == 0)
+            {
+                <p class="muted">No devices match these filters.</p>
+            }
+            <div class="device-grid">
+                @foreach (var d in Visible)
+                {
+                    var sev = SevClass(d);
+                    <div class="device @sev @(d.MacAddress == State.SelectedMac ? "selected" : "")"
+                         @onclick="() => State.SelectDeviceAsync(d.MacAddress)">
+                        <div class="device-head">
+                            <span class="dot @sev"></span>
+                            <strong>@d.DisplayName</strong>
+                            <span class="cat-icon" title="@d.Category">@CategoryIcon(d.Category)</span>
+                        </div>
+                        <div class="mac">@d.MacAddress</div>
+                        <div class="loc">@d.Location</div>
+
+                        @if (d.IsActuator)
+                        {
+                            <div class="value">@(d.ActuatorOn ? "ON" : "OFF")</div>
+                            <div class="switch-row">
+                                <button class="btn btn-sm @(d.ActuatorOn ? "btn-ghost" : "btn-primary")" disabled="@(_busy || d.ActuatorOn)"
+                                        @onclick="() => TurnOn(d.MacAddress)" @onclick:stopPropagation="true">Turn ON</button>
+                                <button class="btn btn-sm @(d.ActuatorOn ? "btn-primary" : "btn-ghost")" disabled="@(_busy || !d.ActuatorOn)"
+                                        @onclick="() => TurnOff(d.MacAddress)" @onclick:stopPropagation="true">Turn OFF</button>
+                            </div>
+                        }
+                        else
+                        {
+                            <div class="value">@(d.LastValue?.ToString("0.0") ?? "—")<small>@d.Unit</small></div>
+                            @if (d.Thresholds is not null && d.LastValue is { } v)
+                            {
+                                <div class="gauge" title="Position between critical limits">
+                                    <span style="left:@GaugePct(d, v)%"></span>
+                                </div>
+                            }
+                        }
+                        <div class="status">@d.StatusMessage</div>
+                    </div>
+                }
+            </div>
+        </section>
+
+        <div class="side-col">
+            @* ---------------- Timeline ---------------- *@
+            <section class="panel">
+                <header class="panel-head">
+                    <h2>@(Selected?.DisplayName ?? "Timeline")</h2>
+                    <div class="seg">
+                        @foreach (var m in new[] { 2, 5, 10 })
+                        {
+                            <button class="@(State.TimelineMinutes == m ? "on" : "")" @onclick="() => State.SetTimelineMinutesAsync(m)">@(m)m</button>
+                        }
+                    </div>
+                </header>
+                @if (Selected is null)
+                {
+                    <p class="muted">Select a device to see its live timeline (served from a time-ordered SortedDictionary).</p>
+                }
+                else
+                {
+                    <p class="muted small">@Selected.MacAddress · @Selected.Location · @Selected.ReadingCount.ToString("N0") readings</p>
+                    <TimelineChart Points="State.Timeline" Thresholds="Selected.Thresholds" Unit="@Selected.Unit"
+                                   Label="@Selected.DisplayName" Minutes="State.TimelineMinutes" />
+                    @if (!Selected.IsActuator)
+                    {
+                        <button class="btn btn-outline btn-sm mt" disabled="@_busy" @onclick="() => State.InjectCriticalAsync(Selected.MacAddress)">
+                            🚨 Inject critical reading for this device
+                        </button>
+                    }
+                }
+            </section>
+
+            @* ---------------- Command console (Stack) ---------------- *@
+            <section class="panel">
+                <header class="panel-head">
+                    <h2>Manual overrides</h2>
+                    <span class="muted small">undo stack depth @s.UndoDepth</span>
+                </header>
+                <div class="console-actions">
+                    <button class="btn btn-primary" disabled="@(_busy || s.UndoDepth == 0)" @onclick="Undo"
+                            title="Pops the most recent command off the Stack and reverts it">
+                        ↶ Undo@(s.NextUndoLabel is null ? "" : $": {s.NextUndoLabel}")
+                    </button>
+                    <button class="btn btn-ghost" disabled="@(_busy || s.RedoDepth == 0)" @onclick="Redo">↷ Redo</button>
+                </div>
+                <div class="console-actions">
+                    <button class="btn btn-danger btn-sm" disabled="@_busy" @onclick="@(() => Bulk("OFF", "Valve", "Shut down all valves"))">Shut down all valves</button>
+                    <button class="btn btn-outline btn-sm" disabled="@_busy" @onclick="@(() => Bulk("OFF", "Pump", "Stop all pumps"))">Stop all pumps</button>
+                    <button class="btn btn-outline btn-sm" disabled="@_busy" @onclick="@(() => Bulk("OFF", null, "Emergency: all actuators OFF"))">All actuators OFF</button>
+                </div>
+
+                <ol class="stack-list">
+                    @if (Snap.CommandHistory.Count == 0)
+                    {
+                        <li class="muted">No commands issued yet.</li>
+                    }
+                    @foreach (var c in Snap.CommandHistory.Take(10))
+                    {
+                        <li class="@c.Status.ToLowerInvariant()">
+                            <span class="cmd-label">@c.Label</span>
+                            <span class="cmd-meta">
+                                @c.IssuedUtc.ToLocalTime().ToString("HH:mm:ss") · @c.Source
+                                @if (c.Changes.Count > 1) { <text> · @c.Changes.Count devices</text> }
+                            </span>
+                            <span class="status-badge">@c.Status</span>
+                        </li>
+                    }
+                </ol>
+
+                @if (State.ActivityLog.Count > 0)
+                {
+                    <ul class="activity">
+                        @foreach (var line in State.ActivityLog.Take(5))
+                        {
+                            <li>@line</li>
+                        }
+                    </ul>
+                }
+            </section>
+        </div>
+    </div>
+
+    <div class="stream-grid lower">
+        @* ---------------- Processed packet log (Queue / PriorityQueue) ---------------- *@
+        <section class="panel">
+            <header class="panel-head">
+                <h2>Ingestion stream</h2>
+                <span class="muted small">latest packets processed · priority lane is always drained first</span>
+            </header>
+            <div class="table-wrap">
+                <table class="data">
+                    <thead><tr><th>Received</th><th>Device</th><th class="num">Value</th><th>Lane</th><th>Severity</th><th class="num">Queue wait</th></tr></thead>
+                    <tbody>
+                        @foreach (var p in Snap.RecentProcessed.Take(14))
+                        {
+                            <tr class="@(p.Lane == QueueLane.Priority ? "prio-row" : "")">
+                                <td>@p.ReceivedUtc.ToLocalTime().ToString("HH:mm:ss.f")</td>
+                                <td>@p.DeviceName</td>
+                                <td class="num">@p.Value.ToString("0.##")@p.Unit</td>
+                                <td><span class="lane @(p.Lane == QueueLane.Priority ? "prio" : "std")">@p.Lane</span></td>
+                                <td><span class="sev @p.Severity.ToString().ToLowerInvariant()">@p.Severity</span></td>
+                                <td class="num">@Ms(p.QueueLatencyMs)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        @* ---------------- Alerts (HashSet) ---------------- *@
+        <section class="panel">
+            <header class="panel-head">
+                <h2>Active alerts</h2>
+                <span class="muted small">unique per device + alert code</span>
+            </header>
+            @if (Snap.ActiveAlerts.Count == 0)
+            {
+                <p class="muted">All clear.</p>
+            }
+            <ul class="alert-list">
+                @foreach (var a in Snap.ActiveAlerts.Take(10))
+                {
+                    <li class="@a.Severity.ToString().ToLowerInvariant()" @onclick="() => State.SelectDeviceAsync(a.MacAddress)">
+                        <span class="sev @a.Severity.ToString().ToLowerInvariant()">@a.Code</span>
+                        <span class="alert-msg">@a.Message</span>
+                        <span class="muted small">since @a.RaisedUtc.ToLocalTime().ToString("HH:mm:ss")</span>
+                    </li>
+                }
+            </ul>
+            <h3 class="sub">Disconnected nodes</h3>
+            @if (Snap.DisconnectedNodes.Count == 0)
+            {
+                <p class="muted small">Every node is sending heartbeats.</p>
+            }
+            else
+            {
+                <div class="chips">
+                    @foreach (var mac in Snap.DisconnectedNodes)
+                    {
+                        <span class="chip offline" @onclick="() => State.SelectDeviceAsync(mac)">@NameOf(mac)</span>
+                    }
+                </div>
+            }
+            <p class="muted small">
+                The watchdog re-checks every second; the set has rejected
+                <strong>@s.DuplicateDisconnectsSuppressed.ToString("N0")</strong> repeat disconnect alerts and
+                <strong>@s.DuplicateAlertsSuppressed.ToString("N0")</strong> repeat threshold alerts.
+            </p>
+        </section>
+    </div>
+}
+
+@code {
+    private bool _busy;
+    private bool _showPatterns;
+
+    private StreamSnapshot? Snap => State.Snapshot;
+    private IReadOnlyList<LiveDevice> Visible => State.VisibleDevices();
+    private LiveDevice? Selected => State.SelectedMac is null ? null
+        : Snap?.Devices.FirstOrDefault(d => d.MacAddress == State.SelectedMac);
+
+    protected override async Task OnInitializedAsync()
+    {
+        State.Changed += OnChanged;
+        await State.EnsureStartedAsync();
+        if (State.Snapshot is null) await State.RefreshAsync();
+    }
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+
+    private Task OnSearchInput(ChangeEventArgs e) => State.SetSearchTextAsync(e.Value?.ToString() ?? "");
+    private Task OnCategoryChanged(ChangeEventArgs e) => State.SetCategoryAsync(e.Value?.ToString() ?? "");
+    private Task OnStateChanged(ChangeEventArgs e) => State.SetStateFilterAsync(e.Value?.ToString() ?? "");
+
+    private async Task Guard(Func<Task> work)
+    {
+        if (_busy) return;
+        _busy = true;
+        try { await work(); }
+        finally { _busy = false; }
+    }
+
+    private Task Command(string mac, string action) => Guard(() => State.SendCommandAsync(mac, action));
+    private Task TurnOn(string mac) => Command(mac, "ON");
+    private Task TurnOff(string mac) => Command(mac, "OFF");
+    private Task Bulk(string action, string? nameContains, string label) => Guard(() => State.SendBulkAsync(action, nameContains, label));
+    private Task Undo() => Guard(() => State.UndoAsync());
+    private Task Redo() => Guard(() => State.RedoAsync());
+    private Task RunBurst() => Guard(() => State.SimulateBurstAsync(State.SelectedMac));
+    private Task RunSuggestion(SuggestedAction sg) =>
+        Guard(() => State.SendCommandAsync(sg.TargetMac!, sg.CommandAction!, "suggestion"));
+
+    private async Task TogglePatterns()
+    {
+        _showPatterns = !_showPatterns;
+        if (_showPatterns) await State.LoadPatternsAsync();
+    }
+
+    private static string SevClass(LiveDevice d) =>
+        !d.IsOnline && d.LastSeenUtc is not null ? "offline"
+        : d.Severity switch { AlertSeverity.Critical => "critical", AlertSeverity.Warning => "warning", _ => "normal" };
+
+    private static string CategoryIcon(string category) => category switch
+    {
+        DeviceCategories.Power => "⚡",
+        DeviceCategories.Actuator => "⚙",
+        _ => "🌱"
+    };
+
+    private static string Ms(double ms) => ms >= 1000 ? $"{ms / 1000:0.0} s" : $"{ms:0} ms";
+
+    private static string GaugePct(LiveDevice d, double v)
+    {
+        var t = d.Thresholds!;
+        double lo = t.CriticalLow ?? 0;
+        double hi = t.CriticalHigh ?? Math.Max(v * 1.5, lo + 1);
+        double pct = Math.Clamp((v - lo) / Math.Max(hi - lo, 0.001) * 100, 0, 100);
+        return pct.ToString("0.#", CultureInfo.InvariantCulture);
+    }
+
+    private string NameOf(string mac) =>
+        Snap?.Devices.FirstOrDefault(d => d.MacAddress == mac)?.DisplayName ?? mac;
+
+    public void Dispose() => State.Changed -= OnChanged;
+}

@@ -1,0 +1,85 @@
+@* Live line chart drawn as SVG from the server's SortedDictionary timeline (already time-ordered,
+   so no client-side sorting is needed). Threshold lines show how close a sensor is to its limits. *@
+
+@if (Points is null || Points.Count < 2)
+{
+    <div class="chart-empty">@(Points is null ? "Loading timeline…" : "Waiting for more readings…")</div>
+}
+else
+{
+    <svg class="chart" viewBox="0 0 @W @H" preserveAspectRatio="none" role="img"
+         aria-label="@($"{Label} over the last {Minutes} minutes")">
+        @foreach (var line in ThresholdLines)
+        {
+            <line x1="0" x2="@W" y1="@F(Y(line.Value))" y2="@F(Y(line.Value))" class="th @line.Css" />
+            @* <text> is a reserved Razor tag inside code blocks, so the SVG label is emitted as markup. *@
+            @((MarkupString)$"<text x=\"{F(W - 4)}\" y=\"{F(Y(line.Value) - 4)}\" text-anchor=\"end\" class=\"th-label {line.Css}\">{System.Net.WebUtility.HtmlEncode(line.Label)}</text>")
+        }
+        <polygon points="@AreaPoints" class="area" />
+        <polyline points="@LinePoints" class="line" />
+        <circle cx="@F(X(Points[^1].TimestampUtc))" cy="@F(Y(Points[^1].Value))" r="4" class="last" />
+    </svg>
+    <div class="chart-axis">
+        <span>@Points[0].TimestampUtc.ToLocalTime().ToString("HH:mm:ss")</span>
+        <span>min @Points.Min(p => p.Value).ToString("0.#")@Unit · max @Points.Max(p => p.Value).ToString("0.#")@Unit · @Points.Count pts</span>
+        <span>@Points[^1].TimestampUtc.ToLocalTime().ToString("HH:mm:ss")</span>
+    </div>
+}
+
+@code {
+    [Parameter] public List<TimelinePoint>? Points { get; set; }
+    [Parameter] public Thresholds? Thresholds { get; set; }
+    [Parameter] public string Unit { get; set; } = "";
+    [Parameter] public string Label { get; set; } = "";
+    [Parameter] public int Minutes { get; set; } = 5;
+
+    private const double W = 600, H = 220, Pad = 12;
+    private double _lo, _hi;
+    private DateTime _t0, _t1;
+
+    private record ThresholdLine(double Value, string Label, string Css);
+    private List<ThresholdLine> ThresholdLines { get; set; } = new();
+
+    protected override void OnParametersSet()
+    {
+        if (Points is null || Points.Count < 2) return;
+        _t0 = Points[0].TimestampUtc;
+        _t1 = Points[^1].TimestampUtc;
+        double min = Points.Min(p => p.Value), max = Points.Max(p => p.Value);
+        double span = Math.Max(max - min, 1);
+
+        // Show a threshold only if it is reasonably close to the data, so the line stays readable.
+        ThresholdLines = new();
+        void Consider(double? v, string label, string css)
+        {
+            if (v is { } x && x >= min - span * 0.6 && x <= max + span * 0.6)
+                ThresholdLines.Add(new ThresholdLine(x, $"{label} {x:0.#}{Unit}", css));
+        }
+        Consider(Thresholds?.CriticalLow, "critical", "crit");
+        Consider(Thresholds?.WarningLow, "warn", "warn");
+        Consider(Thresholds?.WarningHigh, "warn", "warn");
+        Consider(Thresholds?.CriticalHigh, "critical", "crit");
+
+        _lo = Math.Min(min, ThresholdLines.Count > 0 ? ThresholdLines.Min(t => t.Value) : min);
+        _hi = Math.Max(max, ThresholdLines.Count > 0 ? ThresholdLines.Max(t => t.Value) : max);
+        double pad = Math.Max((_hi - _lo) * 0.08, 0.5);
+        _lo -= pad;
+        _hi += pad;
+    }
+
+    private double X(DateTime t)
+    {
+        double total = Math.Max((_t1 - _t0).TotalMilliseconds, 1);
+        return Pad + (t - _t0).TotalMilliseconds / total * (W - 2 * Pad);
+    }
+
+    private double Y(double v) => Pad + (1 - (v - _lo) / (_hi - _lo)) * (H - 2 * Pad);
+
+    // SVG coordinates must use '.' decimals whatever the browser culture (en-ZA uses ',').
+    private static string F(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+
+    private string LinePoints => string.Join(" ", Points!.Select(p => $"{F(X(p.TimestampUtc))},{F(Y(p.Value))}"));
+
+    private string AreaPoints =>
+        $"{F(X(_t0))},{F(H - Pad)} {LinePoints} {F(X(_t1))},{F(H - Pad)}";
+}
