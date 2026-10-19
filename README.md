@@ -234,6 +234,6 @@ Part 1 endpoints (`/api/sensors`, `/api/deployment/validate`, `/api/power/aggreg
 | Item | Link |
 |---|---|
 | Repository | https://github.com/evanildo26/SmartX-PROG7312 |
-| Video demo | [add YouTube link] |
+| Video demo | https://youtu.be/vzVGulWa2Mg |
 | Feedback ledger | [FEEDBACK.md](FEEDBACK.md) |
 | Author | Evanildo Julio Chaves Jose (ST10437401) |
