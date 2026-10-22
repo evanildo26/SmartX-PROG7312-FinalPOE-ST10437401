@@ -539,12 +539,12 @@ public sealed class CommandStreamEngine
                 case "offline": candidates = candidates.Where(d => _disconnectedNodes.Contains(d.MacAddress)); break;
                 case "online": candidates = candidates.Where(d => !_disconnectedNodes.Contains(d.MacAddress)); break;
                 case "alerting":
-                    {
-                        // Project the alert set to a set of MACs once, then each membership test is O(1).
-                        var alerting = _activeAlerts.Select(a => a.MacAddress).ToHashSet(StringComparer.OrdinalIgnoreCase);
-                        candidates = candidates.Where(d => alerting.Contains(d.MacAddress));
-                        break;
-                    }
+                {
+                    // Project the alert set to a set of MACs once, then each membership test is O(1).
+                    var alerting = _activeAlerts.Select(a => a.MacAddress).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    candidates = candidates.Where(d => alerting.Contains(d.MacAddress));
+                    break;
+                }
             }
 
             var results = candidates

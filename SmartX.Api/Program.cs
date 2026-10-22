@@ -1,5 +1,6 @@
 using SmartX.Api.Endpoints;
 using SmartX.Api.Services;
+using SmartX.Api.Services.Topology;
 using SmartX.Shared;
 using System.Collections.Concurrent;
 
@@ -30,6 +31,12 @@ builder.Services.AddSingleton(_ =>
 builder.Services.AddHostedService<StreamProcessorService>();
 builder.Services.AddHostedService<SnapshotBroadcaster>();
 
+// ---- Final PoE: network topology & mesh routing ------------------------------------------
+// Built on top of the Part 2 engine: device status and new readings flow from it into the mesh
+// graph and the AVL-indexed history. Seeding a week of history takes well under a second.
+builder.Services.AddSingleton(sp => new MeshTopologyEngine(sp.GetRequiredService<CommandStreamEngine>()));
+builder.Services.AddHostedService<TopologyBroadcaster>();
+
 var app = builder.Build();
 app.UseCors("AllowClient");
 if (app.Environment.IsDevelopment()) app.MapOpenApi();
@@ -39,8 +46,9 @@ var registry = new ConcurrentDictionary<string, SensorProfile>(StringComparer.Or
 var deploymentTree = DeploymentNode.BuildDemoTree();
 var engine = app.Services.GetRequiredService<CommandStreamEngine>();
 
-app.MapGet("/api/health", (CommandStreamEngine e) =>
-    Results.Ok(new { status = "ok", utc = DateTime.UtcNow, devices = e.GetStats().DevicesTotal }));
+app.MapGet("/api/health", (CommandStreamEngine e, MeshTopologyEngine t) =>
+    Results.Ok(new { status = "ok", utc = DateTime.UtcNow, devices = e.GetStats().DevicesTotal,
+                     historyPoints = t.History.TotalPoints }));
 
 // ---- Sensor registration (Part 1) -----------------------------------------------------
 app.MapPost("/api/sensors", (SensorRegistrationRequest req) =>
@@ -154,6 +162,9 @@ app.MapGet("/api/power/aggregate", (double watts1, double watts2) =>
 // ---- Part 2: Real-Time Command Stream ------------------------------------------------------
 app.MapStreamEndpoints();
 app.MapHub<TelemetryHub>("/hubs/telemetry");
+
+// ---- Final PoE: Network Topology & Mesh Routing --------------------------------------------
+app.MapTopologyEndpoints();
 
 app.Run();
 

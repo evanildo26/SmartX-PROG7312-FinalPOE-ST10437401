@@ -34,11 +34,19 @@
         <span class="pillar-cta">Open →</span>
     </a>
 
-    <a class="pillar-card upcoming" href="topology">
+    <a class="pillar-card active live" href="topology">
         <span class="pillar-step">Pillar 3 · Final PoE</span>
         <h3>🕸 Network Topology &amp; Mesh Routing</h3>
-        <p>Graph of mesh links, BFS/DFS reachability and a minimum spanning tree for power-efficient routing.</p>
-        <span class="pillar-cta">Preview →</span>
+        <p>Live mesh graph, BFS/DFS reachability, Prim's and Kruskal's MST routing, route tracking by MAC and AVL-indexed history.</p>
+        @if (State.Topology is { } topo)
+        {
+            <div class="pillar-stats">
+                <span><strong>@(topo.Summary.ReachableCount - 1)</strong>/@(topo.Summary.NodeCount - 1) reachable</span>
+                <span><strong>@topo.Summary.MaxHops</strong> max hops</span>
+                <span><strong>@topo.Summary.SavingsPercent.ToString("0")%</strong> energy saved by MST</span>
+            </div>
+        }
+        <span class="pillar-cta">Open →</span>
     </a>
 </div>
 
@@ -46,8 +54,14 @@
     protected override async Task OnInitializedAsync()
     {
         State.Changed += OnChanged;
+        State.TopologyChanged += OnChanged;
         await State.EnsureStartedAsync();
+        if (State.Topology is null) await State.RefreshTopologyAsync();
     }
     private void OnChanged() => InvokeAsync(StateHasChanged);
-    public void Dispose() => State.Changed -= OnChanged;
+    public void Dispose()
+    {
+        State.Changed -= OnChanged;
+        State.TopologyChanged -= OnChanged;
+    }
 }

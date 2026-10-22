@@ -1,56 +1,683 @@
 @page "/topology"
 @implements IDisposable
-@inject StreamStateService State
+@inject TopologyState Topo
 
 <PageTitle>Network Topology · Smart-X</PageTitle>
 
 <div class="page-head">
     <div>
         <h1>Network Topology &amp; Mesh Routing</h1>
-        <p class="muted">Scheduled for the final PoE: graph model of the mesh, BFS/DFS reachability, Prim's/Kruskal's MST
-            and a tree-indexed telemetry history. Below is a live preview of the node inventory it will route.</p>
+        <p class="muted">The live ESP32 mesh as a graph: BFS/DFS reachability, Prim's and Kruskal's minimum spanning tree for
+            power-efficient routing, route tracking by MAC address, and AVL-indexed telemetry history.</p>
     </div>
-    <span class="tag-upcoming">Final PoE</span>
+    <div class="head-actions">
+        <button class="btn btn-outline" @onclick="Topo.ResetAsync" disabled="@(Snap is null)"
+                title="Restore every link and node failed for testing">↺ Reset simulated failures</button>
+    </div>
 </div>
 
-@if (State.Snapshot is null)
+@if (Snap is null)
 {
-    <div class="panel empty-state"><p>Waiting for the gateway…</p></div>
+    <div class="panel empty-state">
+        <h3>Connecting to the gateway…</h3>
+        <p>Start <strong>SmartX.Api</strong> (and <strong>SmartX.Simulator</strong> for live device traffic and link reports).</p>
+    </div>
 }
 else
 {
-    <div class="zone-grid">
-        @foreach (var zone in State.Snapshot.Devices.GroupBy(d => ZoneOf(d.Location)).OrderBy(g => g.Key))
-        {
-            <section class="panel zone">
-                <header class="panel-head"><h2>@zone.Key</h2><span class="muted small">@zone.Count() nodes</span></header>
-                <ul class="node-list">
-                    @foreach (var d in zone.OrderBy(n => n.DisplayName))
+    var sum = Snap.Summary;
+
+    @* ---------------- KPI strip ---------------- *@
+    <section class="kpis">
+        <div class="kpi @(sum.UnreachableMacs.Count + sum.DownMacs.Count > 0 ? "warn" : "good")">
+            <span class="kpi-label">Reachable from gateway</span>
+            <span class="kpi-value">@(sum.ReachableCount - 1)<small>/@(sum.NodeCount - 1)</small></span>
+            <span class="kpi-sub">@sum.DownMacs.Count down · @sum.UnreachableMacs.Count cut off · BFS</span>
+        </div>
+        <div class="kpi">
+            <span class="kpi-label">Deepest node</span>
+            <span class="kpi-value">@sum.MaxHops<small> hops</small></span>
+            <span class="kpi-sub">@sum.ActiveLinkCount of @sum.LinkCount links active</span>
+        </div>
+        <div class="kpi @(sum.ArticulationPoints.Count > 0 ? "warn" : "good")">
+            <span class="kpi-label">Single points of failure</span>
+            <span class="kpi-value">@sum.ArticulationPoints.Count</span>
+            <span class="kpi-sub">articulation points (Tarjan DFS)</span>
+        </div>
+        <div class="kpi good">
+            <span class="kpi-label">MST energy</span>
+            <span class="kpi-value">@sum.MstCost.ToString("0.0")<small> eu</small></span>
+            <span class="kpi-sub" title="eu = energy units: relative radio energy to deliver one packet, (distance/10)² ÷ reception ratio">@sum.SavingsPercent.ToString("0.#")% less than using all links (@sum.TotalActiveLinkCost.ToString("0") eu)</span>
+        </div>
+        <div class="kpi @(sum.PrimKruskalAgree ? "good" : "crit")">
+            <span class="kpi-label">Prim = Kruskal</span>
+            <span class="kpi-value">@(sum.PrimKruskalAgree ? "✓" : "✗")</span>
+            <span class="kpi-sub">@sum.PrimCost.ToString("0.00") vs @sum.KruskalCost.ToString("0.00") eu</span>
+        </div>
+        <div class="kpi">
+            <span class="kpi-label">History indexed</span>
+            <span class="kpi-value">@Compact(sum.HistoryPointCount)</span>
+            <span class="kpi-sub">readings in @sum.HistorySensorCount AVL trees</span>
+        </div>
+    </section>
+
+    <div class="topo-grid">
+        @* ---------------- Mesh map ---------------- *@
+        <section class="panel map-panel">
+            <header class="panel-head">
+                <div>
+                    <h2>Live mesh map · Facility A</h2>
+                    <p class="muted small">Click a node to track its route · click a link to fail or restore it.</p>
+                </div>
+                <div class="seg" role="group" aria-label="Map view">
+                    <button class="@(Topo.View == "links" ? "on" : "")" @onclick='() => Topo.SetView("links")'>All links</button>
+                    <button class="@(Topo.View == "mst" ? "on" : "")" @onclick='() => Topo.LoadMstAsync(Topo.MstAlgorithm)'>MST backbone</button>
+                    <button class="@(Topo.View == "traversal" ? "on" : "")" disabled="@(Topo.Traversal is null)" @onclick='() => Topo.SetView("traversal")'>Traversal</button>
+                    <button class="@(Topo.View == "route" ? "on" : "")" disabled="@(Topo.Route is null)" @onclick='() => Topo.SetView("route")'>Route</button>
+                </div>
+            </header>
+
+            <svg class="mesh" viewBox="0 0 @F(Snap.MapWidth) @F(Snap.MapHeight)" role="img"
+                 aria-label="Mesh network map with @Snap.Nodes.Count nodes and @Snap.Links.Count links">
+                @foreach (var z in Snap.Zones)
+                {
+                    <rect class="zone" x="@F(z.X)" y="@F(z.Y)" width="@F(z.Width)" height="@F(z.Height)" rx="1.5" />
+                    @SvgText(z.X + 1.2, z.Y + 2.6, z.Name, "zone-label", "start")
+                }
+
+                @foreach (var l in Snap.Links)
+                {
+                    if (!_nodes.TryGetValue(l.A, out var a) || !_nodes.TryGetValue(l.B, out var b)) continue;
+                    <line class="@LinkCss(l)" x1="@F(a.X)" y1="@F(a.Y)" x2="@F(b.X)" y2="@F(b.Y)" />
+                    <line class="hit" x1="@F(a.X)" y1="@F(a.Y)" x2="@F(b.X)" y2="@F(b.Y)"
+                          @onclick="() => Topo.ToggleLinkAsync(l.A, l.B)">
+                        <title>@a.DisplayName ↔ @b.DisplayName · @l.DistanceMeters.ToString("0.0") m · @l.Rssi dBm · cost @l.Cost.ToString("0.00")@(l.IsFailed ? " · FAILED (click to restore)" : " · click to fail")</title>
+                    </line>
+                }
+
+                @foreach (var n in Snap.Nodes)
+                {
+                    <g class="@NodeCss(n)" @onclick="() => Topo.SelectNodeAsync(n.MacAddress)">
+                        <title>@n.DisplayName · @n.MacAddress · @n.State · @(n.HopCount is { } hopCount ? $"{hopCount} hop(s)" : "no route")@(n.IsArticulationPoint ? $" · single point of failure ({n.NodesCutOffIfLost} node(s) depend on it)" : "")</title>
+                        @if (n.IsArticulationPoint)
+                        {
+                            <circle class="ap-ring" cx="@F(n.X)" cy="@F(n.Y)" r="3.6" />
+                        }
+                        @if (n.Role == MeshRole.Gateway)
+                        {
+                            <rect class="shape" x="@F(n.X - 2.8)" y="@F(n.Y - 2.8)" width="5.6" height="5.6" rx="1" />
+                        }
+                        else
+                        {
+                            <circle class="shape" cx="@F(n.X)" cy="@F(n.Y)" r="2.4" />
+                        }
+                        @SvgText(n.X, n.Y + 0.75, Badge(n), "badge", "middle")
+                        @SvgText(n.X, n.Y + 5.1, Short(n.DisplayName), "node-label", "middle")
+                    </g>
+                }
+            </svg>
+
+            <div class="legend">
+                <span><i class="sw online"></i>online</span>
+                <span><i class="sw offline"></i>down</span>
+                <span><i class="sw unreachable"></i>cut off</span>
+                <span><i class="sw ring"></i>single point of failure</span>
+                @switch (Topo.View)
+                {
+                    case "mst":
+                        <span><i class="ln mst"></i>MST link (@(Topo.MstAlgorithm == "kruskal" ? "Kruskal" : "Prim"))</span>
+                        break;
+                    case "route":
+                        <span><i class="ln route"></i>MST route</span>
+                        <span><i class="ln shortest"></i>cheapest path</span>
+                        <span><i class="ln backup"></i>backup hop</span>
+                        break;
+                    case "traversal":
+                        <span><i class="ln trav"></i>@(Topo.Traversal?.Algorithm) tree · numbers = visit order</span>
+                        break;
+                    default:
+                        <span><i class="ln q1"></i>strong</span>
+                        <span><i class="ln q2"></i>fair</span>
+                        <span><i class="ln q3"></i>weak</span>
+                        break;
+                }
+                <span><i class="ln failed"></i>failed</span>
+            </div>
+
+            <h3 class="sub">Self-healing events</h3>
+            @if (Snap.RecentEvents.Count == 0)
+            {
+                <p class="muted small">No changes yet. Isolate a node or fail a link to watch the mesh re-route.</p>
+            }
+            else
+            {
+                <ul class="events">
+                    @foreach (var e in Snap.RecentEvents)
+                    {
+                        <li>@e</li>
+                    }
+                </ul>
+            }
+        </section>
+
+        @* ---------------- Route tracking ---------------- *@
+        <div class="side-col">
+            <section class="panel">
+                <header class="panel-head">
+                    <div>
+                        <h2>Track a node's route</h2>
+                        <p class="muted small">Enter a MAC address or device name.</p>
+                    </div>
+                </header>
+                <div class="form-row">
+                    <input list="mesh-nodes" placeholder="24:6F:28:A1:00:02 or Moisture Sensor B" @bind="Topo.RouteInput"
+                           @bind:event="oninput" @onkeydown="OnRouteKey" aria-label="MAC address or device name" />
+                    <button class="btn btn-primary" @onclick="Topo.TrackRouteAsync">Track</button>
+                </div>
+                <datalist id="mesh-nodes">
+                    @foreach (var n in Snap.Nodes)
+                    {
+                        <option value="@n.MacAddress">@n.DisplayName</option>
+                    }
+                </datalist>
+
+                @if (Topo.SelectedMac is not null && Topo.Node(Topo.SelectedMac) is { } sel)
+                {
+                    <div class="node-card">
+                        <div class="node-card-head">
+                            <strong>@sel.DisplayName</strong>
+                            <span class="state-pill @sel.State.ToString().ToLowerInvariant()">@StateText(sel.State)</span>
+                        </div>
+                        <div class="mac">@sel.MacAddress · @sel.Zone · @sel.Category</div>
+                        <div class="facts">
+                            <span>Role <b>@sel.Role</b></span>
+                            <span>Hops <b>@(sel.HopCount?.ToString() ?? "—")</b></span>
+                            <span>Links <b>@sel.Degree</b></span>
+                            <span>Route cost <b>@(sel.RouteCost?.ToString("0.00") ?? "—")</b></span>
+                        </div>
+                        @if (sel.IsArticulationPoint)
+                        {
+                            <p class="warn-note">⚠ Single point of failure: @sel.NodesCutOffIfLost node(s) lose the gateway if this relay fails.</p>
+                        }
+                        <div class="console-actions mt">
+                            @if (sel.Role != MeshRole.Gateway)
+                            {
+                                <button class="btn btn-sm @(sel.State == MeshNodeState.Isolated ? "btn-primary" : "btn-danger")"
+                                        @onclick="() => Topo.ToggleNodeAsync(sel.MacAddress)">
+                                    @(sel.State == MeshNodeState.Isolated ? "Restore node" : "Simulate node failure")
+                                </button>
+                            }
+                            <button class="btn btn-sm btn-outline" @onclick='() => Topo.RunTraversalAsync("bfs", sel.MacAddress)'>BFS from here</button>
+                            <button class="btn btn-sm btn-outline" @onclick='() => Topo.RunTraversalAsync("dfs", sel.MacAddress)'>DFS from here</button>
+                            <button class="btn btn-sm btn-ghost" @onclick="Topo.ClearSelection">Clear</button>
+                        </div>
+                    </div>
+
+                    @if (Topo.Route is { } r)
+                    {
+                        @if (!r.Found)
+                        {
+                            <p class="notice error mt">@r.Message</p>
+                        }
+                        else
+                        {
+                            <p class="small mt">@r.Message</p>
+                            <ol class="hops">
+                                @foreach (var hop in r.Hops)
+                                {
+                                    <li>
+                                        <span>@hop.FromName → <b>@hop.ToName</b></span>
+                                        <span class="muted small">@hop.Rssi dBm · cost @hop.Cost.ToString("0.00")</span>
+                                    </li>
+                                }
+                            </ol>
+                            <table class="data compare">
+                                <tbody>
+                                    <tr><td><i class="ln route"></i> MST route (used)</td><td class="num">@r.MstCost.ToString("0.00") eu</td><td class="num">@(r.MstPath.Count - 1) hops</td></tr>
+                                    <tr><td><i class="ln shortest"></i> Cheapest path (Dijkstra)</td><td class="num">@r.ShortestCost.ToString("0.00") eu</td><td class="num">@(r.ShortestPath.Count - 1) hops</td></tr>
+                                    @if (r.BackupPath is { } bp && r.BackupCost is { } bc)
+                                    {
+                                        <tr><td><i class="ln backup"></i> If @r.ShortestPathNames[1] fails</td><td class="num">@bc.ToString("0.00") eu</td><td class="num">@(bp.Count - 1) hops</td></tr>
+                                    }
+                                    else if (r.ShortestPath.Count > 2)
+                                    {
+                                        <tr><td colspan="3" class="crit-text">No backup: if @r.ShortestPathNames[1] fails this node is cut off.</td></tr>
+                                    }
+                                </tbody>
+                            </table>
+                            @if (r.BackupPathNames is { } names)
+                            {
+                                <p class="muted small">Backup hop: @string.Join(" → ", names)</p>
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    <p class="muted small mt">Tip: click any node on the map. Try <b>Moisture Sensor C</b> — its only way out is through
+                        Greenhouse 2 Temp and Irrigation Valve Line 2.</p>
+                }
+            </section>
+
+            @* ---------------- BFS / DFS ---------------- *@
+            <section class="panel">
+                <header class="panel-head">
+                    <div>
+                        <h2>Connected devices (BFS / DFS)</h2>
+                        <p class="muted small">Which devices are connected to the gateway or a subnet, and which are down.</p>
+                    </div>
+                </header>
+                <div class="form-row">
+                    <select @bind="Topo.TraversalZone" aria-label="Subnet">
+                        <option value="">Whole mesh (gateway)</option>
+                        @foreach (var z in Snap.Zones)
+                        {
+                            <option value="@z.Name">Subnet: @z.Name</option>
+                        }
+                    </select>
+                    <button class="btn btn-primary btn-sm" @onclick='() => Topo.RunTraversalAsync("bfs")'>Run BFS</button>
+                    <button class="btn btn-outline btn-sm" @onclick='() => Topo.RunTraversalAsync("dfs")'>Run DFS</button>
+                </div>
+
+                @if (Topo.Traversal is { } t)
+                {
+                    <p class="small mt"><b>@t.Algorithm</b> from <b>@t.StartName</b> · @t.DataStructure</p>
+                    <ol class="visit-order">
+                        @foreach (var step in t.Order.Take(Topo.TraversalVisible))
+                        {
+                            <li title="@StepTitle(step)">
+                                <span class="order">@step.Order</span>@Short(step.DisplayName)<small>depth @step.Depth</small>
+                            </li>
+                        }
+                    </ol>
+                    @if (Topo.TraversalAnimating)
+                    {
+                        <button class="btn btn-ghost btn-sm" @onclick="Topo.ShowWholeTraversal">Skip animation</button>
+                    }
+                    <p class="small"><b>@t.VisitedCount</b> connected · <b class="@(t.Down.Count > 0 ? "crit-text" : "")">@t.Down.Count</b> down or unreachable</p>
+                    @if (t.Down.Count > 0)
+                    {
+                        <ul class="down-list">
+                            @foreach (var d in t.Down)
+                            {
+                                <li>
+                                    <strong>@d.DisplayName</strong> <span class="muted small">@d.Reason</span>
+                                    @if (d.SuggestedHopName is not null)
+                                    {
+                                        <span class="small">↪ hop via <b>@d.SuggestedHopName</b></span>
+                                    }
+                                </li>
+                            }
+                        </ul>
+                    }
+                }
+            </section>
+        </div>
+    </div>
+
+    <div class="topo-grid lower">
+        @* ---------------- MST ---------------- *@
+        <section class="panel">
+            <header class="panel-head">
+                <div>
+                    <h2>Minimum spanning tree</h2>
+                    <p class="muted small">The cheapest set of links that still reaches every node — the mesh's power-efficient routing backbone.</p>
+                </div>
+                <div class="seg" role="group" aria-label="MST algorithm">
+                    <button class="@(Topo.MstAlgorithm == "prim" ? "on" : "")" @onclick='() => Topo.LoadMstAsync("prim")'>Prim's</button>
+                    <button class="@(Topo.MstAlgorithm == "kruskal" ? "on" : "")" @onclick='() => Topo.LoadMstAsync("kruskal")'>Kruskal's</button>
+                </div>
+            </header>
+            @if (Topo.Mst is { } m)
+            {
+                <div class="mst-stats">
+                    <span><b>@m.TotalCost.ToString("0.00")</b> eu total</span>
+                    <span><b>@m.EdgeCount</b> links for <b>@m.VertexCount</b> nodes</span>
+                    <span><b>@m.SavingsPercent.ToString("0.#")%</b> below all links (@m.AllLinksCost.ToString("0.0") eu)</span>
+                    <span><b>@m.ElapsedMicroseconds.ToString("0")</b> µs</span>
+                    @if (m.ComponentCount > 1)
+                    {
+                        <span class="crit-text">@m.ComponentCount islands → spanning forest</span>
+                    }
+                </div>
+                <p class="muted small">@m.DataStructure. Links are listed in the order the algorithm accepted them.</p>
+                <div class="table-wrap scroll">
+                    <table class="data">
+                        <thead><tr><th>#</th><th>Link</th><th class="num">Distance</th><th class="num">RSSI</th><th class="num">Cost</th></tr></thead>
+                        <tbody>
+                            @for (int i = 0; i < m.Edges.Count; i++)
+                            {
+                                var e = m.Edges[i];
+                                <tr>
+                                    <td>@(i + 1)</td>
+                                    <td>@Topo.NameOf(e.A) ↔ @Topo.NameOf(e.B)</td>
+                                    <td class="num">@e.DistanceMeters.ToString("0.0") m</td>
+                                    <td class="num">@e.Rssi dBm</td>
+                                    <td class="num">@e.Cost.ToString("0.00")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        @* ---------------- Single points of failure ---------------- *@
+        <section class="panel">
+            <header class="panel-head">
+                <div>
+                    <h2>Resilience: single points of failure</h2>
+                    <p class="muted small">Relays found by Tarjan's articulation-point DFS. Losing one splits the mesh.</p>
+                </div>
+            </header>
+            @{
+                var aps = Snap.Nodes.Where(n => n.IsArticulationPoint).OrderByDescending(n => n.NodesCutOffIfLost).ToList();
+            }
+            @if (aps.Count == 0)
+            {
+                <p class="ok-text">Every node has an alternative path — no single point of failure.</p>
+            }
+            else
+            {
+                <ul class="ap-list">
+                    @foreach (var n in aps)
                     {
                         <li>
-                            <span class="dot @(d.IsOnline ? "normal" : "offline")"></span>
-                            <span>@d.DisplayName</span>
-                            <code>@d.MacAddress</code>
+                            <div>
+                                <strong>@n.DisplayName</strong>
+                                <span class="muted small">If it fails, @n.NodesCutOffIfLost node(s) lose the gateway.</span>
+                            </div>
+                            <button class="btn btn-sm btn-danger" @onclick="() => Topo.ToggleNodeAsync(n.MacAddress)">Simulate failure</button>
                         </li>
                     }
                 </ul>
-            </section>
-        }
+            }
+            @if (Snap.Nodes.Any(n => n.State == MeshNodeState.Isolated))
+            {
+                <h3 class="sub">Isolated by operator</h3>
+                <div class="chips">
+                    @foreach (var n in Snap.Nodes.Where(n => n.State == MeshNodeState.Isolated))
+                    {
+                        <span class="chip offline" @onclick="() => Topo.ToggleNodeAsync(n.MacAddress)" title="Click to restore">@n.DisplayName ✕</span>
+                    }
+                </div>
+            }
+            @if (Topo.ActivityLog.Count > 0)
+            {
+                <ul class="activity">
+                    @foreach (var line in Topo.ActivityLog)
+                    {
+                        <li>@line</li>
+                    }
+                </ul>
+            }
+        </section>
     </div>
+
+    @* ---------------- Historical log (AVL) ---------------- *@
+    <section class="panel">
+        <header class="panel-head">
+            <div>
+                <h2>Historical telemetry log</h2>
+                <p class="muted small">Range queries on a self-balancing AVL tree per sensor: O(log n + k) instead of scanning every reading.</p>
+            </div>
+        </header>
+        <div class="history-controls">
+            <select @bind="Topo.HistoryMac" @bind:after="Topo.QueryHistoryAsync" aria-label="Sensor">
+                @if (Topo.HistoryIndex is null || Topo.HistoryIndex.Count == 0)
+                {
+                    <option value="">Loading sensors…</option>
+                }
+                else
+                {
+                    foreach (var info in Topo.HistoryIndex.OrderBy(x => x.DisplayName))
+                    {
+                        <option value="@info.MacAddress">@info.DisplayName (@info.MacAddress)</option>
+                    }
+                }
+            </select>
+            <div class="seg">
+                <button @onclick='() => Topo.SetHistoryPresetAsync("1h")'>1 h</button>
+                <button @onclick='() => Topo.SetHistoryPresetAsync("6h")'>6 h</button>
+                <button @onclick='() => Topo.SetHistoryPresetAsync("24h")'>24 h</button>
+                <button @onclick='() => Topo.SetHistoryPresetAsync("7d")'>7 days</button>
+                <button @onclick='() => Topo.SetHistoryPresetAsync("yesterday")'>Yesterday 14:00–16:00</button>
+            </div>
+            <label class="small">From <input type="datetime-local" @bind="Topo.HistoryFrom" @bind:format="yyyy-MM-ddTHH:mm" /></label>
+            <label class="small">To <input type="datetime-local" @bind="Topo.HistoryTo" @bind:format="yyyy-MM-ddTHH:mm" /></label>
+            <button class="btn btn-primary btn-sm" disabled="@Topo.HistoryBusy" @onclick="Topo.QueryHistoryAsync">Query range</button>
+        </div>
+
+        @if (Topo.History is { } h)
+        {
+            <div class="history-stats">
+                <div><span class="kpi-label">Readings</span><b>@h.Count.ToString("N0")</b></div>
+                <div><span class="kpi-label">Min</span><b>@Num(h.Min)@h.Unit</b></div>
+                <div><span class="kpi-label">Max</span><b>@Num(h.Max)@h.Unit</b></div>
+                <div><span class="kpi-label">Average</span><b>@Num(h.Average)@h.Unit</b></div>
+                <div class="tree-proof">
+                    <span class="kpi-label">AVL tree</span>
+                    <span>@h.TreeSize.ToString("N0") readings · height <b>@h.TreeHeight</b> ·
+                        visited <b>@h.NodesVisited.ToString("N0")</b> nodes vs <b>@h.LinearComparisons.ToString("N0")</b> for a linear scan ·
+                        <b>@h.ElapsedMicroseconds.ToString("0.#")</b> µs</span>
+                </div>
+            </div>
+
+            @if (h.Count == 0)
+            {
+                <p class="muted">No readings for @h.DisplayName in that range.</p>
+            }
+            else
+            {
+                <TimelineChart Points="h.Points" Unit="@h.Unit" Label="@h.DisplayName"
+                               Minutes="@((int)Math.Max(1, (h.ToUtc - h.FromUtc).TotalMinutes))" />
+                <p class="muted small">
+                    @h.DisplayName from @h.FromUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm") to @h.ToUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                    @(h.Truncated ? $" · chart and log thinned evenly to {h.Points.Count} of {h.Count:N0} readings (statistics use all of them)" : "")
+                </p>
+                <div class="table-wrap scroll log">
+                    <table class="data">
+                        <thead><tr><th>#</th><th>Timestamp (local)</th><th class="num">Value</th><th>Status</th></tr></thead>
+                        <tbody>
+                            @for (int i = h.Points.Count - 1; i >= 0; i--)
+                            {
+                                var p = h.Points[i];
+                                <tr>
+                                    <td>@(i + 1)</td>
+                                    <td>@p.TimestampUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")</td>
+                                    <td class="num">@p.Value.ToString("0.##")@h.Unit</td>
+                                    <td>@Trend(h.Points, i)</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        }
+    </section>
+
+    @* ---------------- Scale benchmark ---------------- *@
+    <section class="panel">
+        <header class="panel-head">
+            <div>
+                <h2>Performance at scale</h2>
+                <p class="muted small">The farm has 16 nodes; the brief talks about thousands. This runs the same code on a 2 000-node mesh and the largest history tree.</p>
+            </div>
+            <button class="btn btn-outline" disabled="@Topo.BenchmarkBusy" @onclick="() => Topo.RunBenchmarkAsync(2000)">
+                @(Topo.BenchmarkBusy ? "Running…" : "Run benchmark")
+            </button>
+        </header>
+        @if (Topo.Benchmark is { } bm)
+        {
+            <div class="bench-grid">
+                <table class="data">
+                    <thead><tr><th colspan="2">History range query (2-hour window)</th></tr></thead>
+                    <tbody>
+                        <tr><td>Readings in the tree</td><td class="num">@bm.HistoryPoints.ToString("N0")</td></tr>
+                        <tr><td>AVL height (≤ 1.44·log₂ n)</td><td class="num">@bm.AvlHeight</td></tr>
+                        <tr><td>Matches</td><td class="num">@bm.QueryMatches.ToString("N0")</td></tr>
+                        <tr><td>AVL nodes visited</td><td class="num">@bm.AvlNodesVisited.ToString("N0")</td></tr>
+                        <tr><td>Linear scan comparisons</td><td class="num">@bm.LinearComparisons.ToString("N0")</td></tr>
+                        <tr><td><b>AVL range query</b></td><td class="num"><b>@bm.AvlQueryMicroseconds.ToString("0.#") µs</b></td></tr>
+                        <tr><td>Linear scan of an unordered list</td><td class="num">@bm.LinearScanMicroseconds.ToString("0.#") µs</td></tr>
+                        <tr><td>Speed-up</td><td class="num ok-text">@Speedup(bm)×</td></tr>
+                    </tbody>
+                </table>
+                <table class="data">
+                    <thead><tr><th colspan="2">Graph algorithms on a @bm.MeshNodes.ToString("N0")-node mesh (@bm.MeshLinks.ToString("N0") links)</th></tr></thead>
+                    <tbody>
+                        <tr><td>BFS — Queue, O(V + E)</td><td class="num">@bm.BfsMilliseconds.ToString("0.00") ms</td></tr>
+                        <tr><td>Prim — binary heap, O(E log E)</td><td class="num">@bm.PrimMilliseconds.ToString("0.00") ms</td></tr>
+                        <tr><td>Kruskal — sort + union–find, O(E log E)</td><td class="num">@bm.KruskalMilliseconds.ToString("0.00") ms</td></tr>
+                        <tr><td>Dijkstra — binary heap, O((V + E) log V)</td><td class="num">@bm.DijkstraMilliseconds.ToString("0.00") ms</td></tr>
+                        <tr><td>Prim and Kruskal agree</td><td class="num @(bm.PrimKruskalAgree ? "ok-text" : "crit-text")">@(bm.PrimKruskalAgree ? "Yes" : "No")</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
 }
 
 @code {
-    private static string ZoneOf(string location)
-    {
-        var parts = location.Split('/', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-        return parts.Length >= 2 ? parts[1] : (parts.FirstOrDefault() ?? "Unassigned");
-    }
+    private Dictionary<string, MeshNodeDto> _nodes = new(StringComparer.OrdinalIgnoreCase);
+    private TopologySnapshot? Snap => Topo.Snapshot;
 
     protected override async Task OnInitializedAsync()
     {
-        State.Changed += OnChanged;
-        await State.EnsureStartedAsync();
+        Topo.Changed += OnChanged;
+        await Topo.EnsureStartedAsync();
     }
-    private void OnChanged() => InvokeAsync(StateHasChanged);
-    public void Dispose() => State.Changed -= OnChanged;
+
+    protected override void OnParametersSet() => IndexNodes();
+
+    private void OnChanged() => InvokeAsync(() =>
+    {
+        IndexNodes();
+        StateHasChanged();
+    });
+
+    private void IndexNodes()
+    {
+        if (Snap is null) return;
+        _nodes = Snap.Nodes.ToDictionary(n => n.MacAddress, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private async Task OnRouteKey(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await Topo.TrackRouteAsync();
+    }
+
+    // ---- Map styling ---------------------------------------------------------------------
+
+    private string NodeCss(MeshNodeDto n)
+    {
+        var css = $"node {n.State.ToString().ToLowerInvariant()}";
+        if (n.Role == MeshRole.Gateway) css += " gateway";
+        if (n.MacAddress.Equals(Topo.SelectedMac, StringComparison.OrdinalIgnoreCase)) css += " selected";
+        if (Topo.View == "route" && Topo.Route is { Found: true } r && Contains(r.MstPath, n.MacAddress)) css += " on-route";
+        if (Topo.View == "traversal" && VisitOrder(n.MacAddress) is not null) css += " visited";
+        return css;
+    }
+
+    private string LinkCss(MeshLinkDto l)
+    {
+        if (l.IsFailed) return "link failed";
+        if (!l.IsActive) return "link inactive";
+        return Topo.View switch
+        {
+            "mst" => l.InMst ? "link mst" : "link dim",
+            "route" when Topo.Route is { Found: true } r =>
+                OnPath(r.MstPath, l) ? "link route"
+                : OnPath(r.ShortestPath, l) ? "link shortest"
+                : r.BackupPath is { } bp && OnPath(bp, l) ? "link backup"
+                : "link dim",
+            "traversal" => OnTraversalTree(l) ? "link trav" : "link dim",
+            _ => l.Rssi >= -72 ? "link q1" : l.Rssi >= -77 ? "link q2" : "link q3"
+        };
+    }
+
+    private static bool Contains(List<string> path, string mac) => path.Any(p => p.Equals(mac, StringComparison.OrdinalIgnoreCase));
+
+    private static bool OnPath(List<string> path, MeshLinkDto l)
+    {
+        for (int i = 0; i + 1 < path.Count; i++)
+            if ((Eq(path[i], l.A) && Eq(path[i + 1], l.B)) || (Eq(path[i], l.B) && Eq(path[i + 1], l.A)))
+                return true;
+        return false;
+    }
+
+    private bool OnTraversalTree(MeshLinkDto l)
+    {
+        if (Topo.Traversal is not { } t) return false;
+        foreach (var step in t.Order.Take(Topo.TraversalVisible))
+            if (step.ParentMac is { } parent &&
+                ((Eq(parent, l.A) && Eq(step.MacAddress, l.B)) || (Eq(parent, l.B) && Eq(step.MacAddress, l.A))))
+                return true;
+        return false;
+    }
+
+    private int? VisitOrder(string mac) =>
+        Topo.Traversal?.Order.Take(Topo.TraversalVisible).FirstOrDefault(s => Eq(s.MacAddress, mac))?.Order;
+
+    private string Badge(MeshNodeDto n)
+    {
+        if (Topo.View == "traversal") return VisitOrder(n.MacAddress)?.ToString() ?? "";
+        if (n.Role == MeshRole.Gateway) return "GW";
+        return n.State switch
+        {
+            MeshNodeState.Offline or MeshNodeState.Isolated => "✕",
+            MeshNodeState.Unreachable => "!",
+            _ => n.HopCount?.ToString() ?? ""
+        };
+    }
+
+    private static bool Eq(string a, string b) => a.Equals(b, StringComparison.OrdinalIgnoreCase);
+
+    private string StepTitle(TraversalStep step) =>
+        step.ParentMac is null ? $"depth {step.Depth} · start" : $"depth {step.Depth} · reached from {Topo.NameOf(step.ParentMac)}";
+
+    /// <summary>Shorter labels so the map stays readable.</summary>
+    private static string Short(string name) => name
+        .Replace("Smart-X Gateway", "Gateway")
+        .Replace("Smart Meter — ", "Meter ")
+        .Replace("Smart Plug — Grow Lights", "Light Plug")
+        .Replace("Irrigation Valve Line", "Valve")
+        .Replace("Moisture Sensor", "Moisture")
+        .Replace("Greenhouse ", "GH")
+        .Replace("Humidity Node", "Humidity")
+        .Replace("Grow Light Relay", "Light Relay");
+
+    private static string StateText(MeshNodeState s) => s switch
+    {
+        MeshNodeState.Online => "Online",
+        MeshNodeState.Offline => "Down",
+        MeshNodeState.Isolated => "Isolated",
+        _ => "Cut off"
+    };
+
+    // ---- SVG helpers ---------------------------------------------------------------------
+
+    // SVG coordinates must use '.' decimals whatever the browser culture (en-ZA uses ',').
+    private static string F(double v) => v.ToString("0.##", CultureInfo.InvariantCulture);
+
+    // <text> is reserved by Razor inside code blocks, so SVG text is emitted as encoded markup.
+    private static MarkupString SvgText(double x, double y, string text, string css, string anchor) =>
+        (MarkupString)$"<text x=\"{F(x)}\" y=\"{F(y)}\" class=\"{css}\" text-anchor=\"{anchor}\">{System.Net.WebUtility.HtmlEncode(text)}</text>";
+
+    // ---- Formatting ------------------------------------------------------------------------
+
+    private static string Compact(long n) => n >= 1_000_000 ? $"{n / 1_000_000.0:0.#}M" : n >= 1000 ? $"{n / 1000.0:0.#}k" : n.ToString();
+    private static string Num(double? v) => v?.ToString("0.##") ?? "—";
+
+    private static string Speedup(ScaleBenchmarkResult b) =>
+        b.AvlQueryMicroseconds <= 0 ? "—" : (b.LinearScanMicroseconds / b.AvlQueryMicroseconds).ToString("0");
+
+    private static string Trend(List<TimelinePoint> points, int i)
+    {
+        if (i == 0) return "first in range";
+        double delta = points[i].Value - points[i - 1].Value;
+        return Math.Abs(delta) < 0.05 ? "steady" : delta > 0 ? $"▲ {delta:0.##}" : $"▼ {Math.Abs(delta):0.##}";
+    }
+
+    public void Dispose() => Topo.Changed -= OnChanged;
 }

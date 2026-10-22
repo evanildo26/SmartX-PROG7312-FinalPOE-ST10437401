@@ -41,7 +41,11 @@
         <div class="nav-item px-3">
             <NavLink class="nav-link" href="topology">
                 <span class="nav-icon">🕸</span>
-                <span class="nav-text">Network Topology &amp; Mesh Routing<small>Final PoE · preview</small></span>
+                <span class="nav-text">Network Topology &amp; Mesh Routing<small>Final PoE · live</small></span>
+                @if (CutOff > 0)
+                {
+                    <span class="nav-badge warning" title="Nodes down or cut off from the gateway">@CutOff</span>
+                }
             </NavLink>
         </div>
     </nav>
@@ -54,8 +58,17 @@
 
     private int Alerts => State.Snapshot?.Stats.ActiveAlertCount ?? 0;
     private int Critical => State.Snapshot?.Stats.CriticalAlertCount ?? 0;
+    private int CutOff => State.Topology is { } t ? t.Summary.DownMacs.Count + t.Summary.UnreachableMacs.Count : 0;
 
-    protected override void OnInitialized() => State.Changed += OnChanged;
+    protected override void OnInitialized()
+    {
+        State.Changed += OnChanged;
+        State.TopologyChanged += OnChanged;
+    }
     private void OnChanged() => InvokeAsync(StateHasChanged);
-    public void Dispose() => State.Changed -= OnChanged;
+    public void Dispose()
+    {
+        State.Changed -= OnChanged;
+        State.TopologyChanged -= OnChanged;
+    }
 }

@@ -12,6 +12,8 @@ public record UiToast(Guid Id, AlertSeverity Severity, string Title, string Mess
 /// Application-wide state for the real-time pillars. Registered once per browser session,
 /// so the SignalR connection, the latest snapshot, search filters and the selected device
 /// all survive navigation between Home, Ingestion, Command Stream and Topology.
+/// One hub connection carries both live feeds: "snapshot" (Part 2 command stream) and
+/// "topology" (final PoE mesh), so every pillar shares the same link and link-state indicator.
 ///
 /// Transport: SignalR push (1 snapshot/second). If the hub cannot connect, it falls back
 /// to REST polling and keeps retrying the hub in the background, so the UI never freezes.
@@ -49,6 +51,10 @@ public sealed class StreamStateService : IAsyncDisposable
     public List<TimelinePoint>? Timeline { get; private set; }
     public List<LearnedPattern>? LearnedPatterns { get; private set; }
 
+    // ---- Final PoE: live mesh topology (same connection, separate message) ----------------
+    public TopologySnapshot? Topology { get; private set; }
+    public event Action? TopologyChanged;
+
     public bool FilterActive => SearchText.Length > 0 || CategoryFilter.Length > 0 || StateFilter.Length > 0;
 
     public event Action? Changed;
@@ -68,6 +74,7 @@ public sealed class StreamStateService : IAsyncDisposable
             .Build();
 
         _hub.On<StreamSnapshot>("snapshot", snapshot => ApplySnapshotAsync(snapshot));
+        _hub.On<TopologySnapshot>("topology", topology => ApplyTopology(topology));
         _hub.Reconnecting += _ => { SetLink(LinkState.Reconnecting); return Task.CompletedTask; };
         _hub.Reconnected += _ => { SetLink(LinkState.Live); return Task.CompletedTask; };
         _hub.Closed += _ => { SetLink(LinkState.Offline); StartFallback(); return Task.CompletedTask; };
@@ -106,6 +113,7 @@ public sealed class StreamStateService : IAsyncDisposable
         {
             if (await RefreshAsync()) SetLink(LinkState.Polling);
             else SetLink(LinkState.Offline);
+            await RefreshTopologyAsync();
 
             if (++attempt % 5 == 0 && _hub is { State: HubConnectionState.Disconnected })
             {
@@ -138,6 +146,28 @@ public sealed class StreamStateService : IAsyncDisposable
         {
             return false;
         }
+    }
+
+    /// <summary>Pulls the mesh topology immediately (after an operator action, or while SignalR is down).</summary>
+    public async Task<bool> RefreshTopologyAsync()
+    {
+        try
+        {
+            var topology = await _http.GetFromJsonAsync<TopologySnapshot>("/api/topology");
+            if (topology is null) return false;
+            ApplyTopology(topology);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void ApplyTopology(TopologySnapshot topology)
+    {
+        Topology = topology;
+        TopologyChanged?.Invoke();
     }
 
     private async Task ApplySnapshotAsync(StreamSnapshot snapshot)

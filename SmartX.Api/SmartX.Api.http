@@ -1,4 +1,4 @@
-# Smart-X Part 2 - manual API tests (Visual Studio / VS Code REST Client / Rider)
+# Smart-X (Parts 1–3) - manual API tests (Visual Studio / VS Code REST Client / Rider)
 @api = http://localhost:5261
 @pumpA = 24:6F:28:C3:00:20
 @moistureB = 24:6F:28:A1:00:02
@@ -85,3 +85,53 @@ GET {{api}}/api/stream/alerts/history
 GET {{api}}/api/stream/suggestions
 ###
 GET {{api}}/api/stream/patterns
+
+### ================= Final PoE: Network Topology & Mesh Routing =================
+
+### Whole mesh: nodes, links, MST flags, articulation points, events
+GET {{api}}/api/topology
+
+### Route tracking by MAC: MST route + cheapest path (Dijkstra) + backup hop
+GET {{api}}/api/topology/route/24:6F:28:A1:00:02
+
+### BFS from the gateway: every connected device, and every device that is down
+GET {{api}}/api/topology/bfs
+
+### DFS limited to the Zone 1 subnet
+GET {{api}}/api/topology/dfs?zone=Zone%201
+
+### Minimum spanning tree — Prim's (binary heap)
+GET {{api}}/api/topology/mst?algorithm=prim
+
+### Minimum spanning tree — Kruskal's (sorted edges + union–find)
+GET {{api}}/api/topology/mst?algorithm=kruskal
+
+### Simulate a relay failure (run again to restore it)
+POST {{api}}/api/topology/nodes/24:6F:28:B2:00:10/toggle
+
+### Simulate a broken radio link (run again to restore it)
+POST {{api}}/api/topology/links/toggle
+Content-Type: application/json
+
+{ "a": "24:6F:28:00:00:00", "b": "24:6F:28:C3:00:23" }
+
+### Clear every simulated failure
+POST {{api}}/api/topology/reset
+
+### What an ESP32 reports: its neighbours' signal strength (weak signal → link cost rises)
+POST {{api}}/api/topology/neighbors
+Content-Type: application/json
+
+{ "macAddress": "24:6F:28:C3:00:20", "neighbors": [ { "neighborMac": "24:6F:28:B2:00:11", "rssi": -90 } ] }
+
+### AVL history: Moisture Sensor A between 14:00 and 16:00 (SAST) yesterday — change the date
+GET {{api}}/api/topology/history/24:6F:28:A1:00:01?from=2026-10-21T14:00:00%2B02:00&to=2026-10-21T16:00:00%2B02:00
+
+### AVL history: last 6 hours
+GET {{api}}/api/topology/history/24:6F:28:A1:00:01?minutes=360
+
+### Size and height of every sensor's AVL tree
+GET {{api}}/api/topology/history
+
+### Scale benchmark: AVL vs linear scan, graph algorithms on a 2 000-node mesh
+GET {{api}}/api/topology/benchmark?nodes=2000

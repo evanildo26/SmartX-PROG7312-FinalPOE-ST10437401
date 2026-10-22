@@ -7,6 +7,9 @@ using SmartX.Shared;
 //  gateway over HTTP once per tick, and every actuator polls its command outbox.
 //  Simple physics closes the loop: turning a pump ON makes soil moisture rise and
 //  pump-house power climb, so operator commands have visible consequences.
+//  Final PoE: every few seconds each node also reports its neighbour table (the RSSI it
+//  hears from each nearby node, like an ESP-NOW peer list), and random radio interference
+//  weakens a link now and then — the gateway re-weights the mesh graph and re-routes.
 //
 //  Usage:  dotnet run --project SmartX.Simulator [apiBaseUrl] [--interval 1000] [--no-dropouts]
 //  Env:    SMARTX_API, SMARTX_INTERVAL_MS
@@ -38,7 +41,10 @@ while (!cts.IsCancellationRequested)
 }
 
 var fleet = new Fleet(await LoadDevicesAsync());
-Console.WriteLine($"  loaded {fleet.Devices.Count} devices ({fleet.Devices.Count(d => d.IsActuator)} actuators). Ctrl+C to stop.\n");
+var radio = new Radio();
+await RefreshLinksAsync();
+Console.WriteLine($"  loaded {fleet.Devices.Count} devices ({fleet.Devices.Count(d => d.IsActuator)} actuators), " +
+                  $"{radio.LinkCount} mesh links. Ctrl+C to stop.\n");
 
 long tick = 0;
 using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(Math.Max(100, intervalMs)));
@@ -80,10 +86,24 @@ try
                           $" · priority {priority} · queues std={last?.StandardQueueDepth ?? 0} prio={last?.PriorityQueueDepth ?? 0}" +
                           (fleet.SilentCount(tick) > 0 ? $" · {fleet.SilentCount(tick)} node(s) silent" : ""));
 
-        // 4. Pick up devices registered later (e.g. from the Ingestion page) every 30 ticks.
+        // 4. Mesh: radio interference comes and goes; every 5 ticks each awake node reports its neighbour RSSI.
+        radio.Step(tick);
+        if (tick % 5 == 0)
+        {
+            var reports = fleet.Devices
+                .Where(d => !fleet.IsSilent(d.MacAddress, tick))
+                .Select(d => radio.ReportFor(d.MacAddress, tick))
+                .Where(r => r.Neighbors.Count > 0)
+                .Select(ReportNeighborsAsync)
+                .ToList();
+            await Task.WhenAll(reports);
+        }
+
+        // 5. Pick up devices registered later (e.g. from the Ingestion page) every 30 ticks.
         if (tick % 30 == 0)
         {
             try { fleet.Merge(await LoadDevicesAsync()); } catch (Exception ex) when (ex is not OperationCanceledException) { }
+            await RefreshLinksAsync();
         }
     }
 }
@@ -98,6 +118,22 @@ async Task<IngestAck?> SendAsync(string mac, double value)
         return response.IsSuccessStatusCode ? await response.Content.ReadFromJsonAsync<IngestAck>(cts.Token) : null;
     }
     catch (Exception ex) when (ex is not OperationCanceledException) { return null; }
+}
+
+async Task ReportNeighborsAsync(NeighborReport report)
+{
+    try { using var response = await http.PostAsJsonAsync("/api/topology/neighbors", report, cts.Token); }
+    catch (Exception ex) when (ex is not OperationCanceledException) { }
+}
+
+async Task RefreshLinksAsync()
+{
+    try
+    {
+        var topology = await http.GetFromJsonAsync<TopologySnapshot>("/api/topology", cts.Token);
+        if (topology is not null) radio.SetLinks(topology.Links);
+    }
+    catch (Exception ex) when (ex is not OperationCanceledException) { /* older gateway without topology: skip */ }
 }
 
 async Task<List<LiveDevice>> LoadDevicesAsync() =>
@@ -216,4 +252,62 @@ sealed class Fleet
     {
         "moisture" => 50, "temperature" => 24, "humidity" => 60, "power" => 500, _ => 0
     };
+}
+
+/// <summary>
+/// Radio conditions between the ESP32s. RSSI follows the log-distance path-loss model
+/// (−40 dBm − 27·log₁₀(d)) with ±1 dB of noise; an interference burst (a passing tractor,
+/// a microwave link, a wet canopy) knocks 14 dB off one link for about 25 seconds.
+/// </summary>
+sealed class Radio
+{
+    private readonly Random _rnd = new();
+    private readonly Dictionary<string, List<(string Neighbor, double Distance)>> _neighbors = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, long> _interferenceUntil = new(StringComparer.OrdinalIgnoreCase);
+    private List<MeshLinkDto> _links = new();
+
+    public int LinkCount => _links.Count;
+
+    public void SetLinks(List<MeshLinkDto> links)
+    {
+        _links = links;
+        _neighbors.Clear();
+        foreach (var l in links)
+        {
+            Add(l.A, l.B, l.DistanceMeters);
+            Add(l.B, l.A, l.DistanceMeters);
+        }
+    }
+
+    private void Add(string from, string to, double distance)
+    {
+        if (!_neighbors.TryGetValue(from, out var list)) _neighbors[from] = list = new();
+        list.Add((to, distance));
+    }
+
+    public void Step(long tick)
+    {
+        if (_links.Count == 0 || _rnd.NextDouble() >= 0.006) return;
+        var link = _links[_rnd.Next(_links.Count)];
+        _interferenceUntil[Key(link.A, link.B)] = tick + 25;
+        Console.WriteLine($"  📶 interference on link {link.A} ↔ {link.B} (−14 dB for ~25 s)");
+    }
+
+    public NeighborReport ReportFor(string mac, long tick)
+    {
+        var heard = new List<NeighborRssi>();
+        if (_neighbors.TryGetValue(mac, out var list))
+        {
+            foreach (var (neighbor, distance) in list)
+            {
+                double rssi = -40 - 27 * Math.Log10(Math.Max(distance, 1)) + (_rnd.NextDouble() - 0.5) * 2;
+                if (_interferenceUntil.TryGetValue(Key(mac, neighbor), out var until) && tick < until) rssi -= 14;
+                heard.Add(new NeighborRssi(neighbor, (int)Math.Round(rssi)));
+            }
+        }
+        return new NeighborReport(mac, heard);
+    }
+
+    private static string Key(string a, string b) =>
+        string.CompareOrdinal(a.ToUpperInvariant(), b.ToUpperInvariant()) <= 0 ? $"{a}|{b}".ToUpperInvariant() : $"{b}|{a}".ToUpperInvariant();
 }
