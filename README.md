@@ -8,7 +8,7 @@ Smart-X is a gateway suite for a fleet of ESP32 microcontrollers in a hydroponic
 | ⏱ **Real-Time Command Stream & History** | Part 2 | FIFO and priority queues, manual overrides with stack-based undo, O(1) device dictionary, sorted timelines, duplicate-free alert sets, and a predictive action engine. |
 | 🕸 **Network Topology & Mesh Routing** | **Final PoE** | The live mesh as a weighted graph. It provides BFS/DFS reachability, Prim's and Kruskal's minimum spanning tree for power-efficient routing, route tracking by MAC address, self-healing when nodes fail, and an AVL tree for range queries over a week of history. |
 
-**Author:** Evanildo Julio Chaves Jose · ST10437401 · PROG7312 · [GitHub repository](https://github.com/evanildo26/SmartX-PROG7312-FinalPOE_ST10437401)
+**Author:** Evanildo Julio Chaves Jose · ST10437401 · PROG7312 · [GitHub repository](https://github.com/evanildo26/SmartX-PROG7312-FinalPOE-ST10437401)
 
 ---
 
@@ -417,7 +417,7 @@ Every request above is ready to run in **`SmartX.Api/SmartX.Api.http`**.
 
 | Item | Link |
 |---|---|
-| Repository | https://github.com/evanildo26/SmartX-PROG7312-FinalPOE_ST10437401 |
+| Repository | https://github.com/evanildo26/SmartX-PROG7312-FinalPOE-ST10437401 |
 | Video demo | [add YouTube link] |
 | Report (PDF) | [docs/PROG7312_PoE_Report_ST10437401.pdf](docs/PROG7312_PoE_Report_ST10437401.pdf) |
 | Feedback ledger | [FEEDBACK.md](FEEDBACK.md) |
