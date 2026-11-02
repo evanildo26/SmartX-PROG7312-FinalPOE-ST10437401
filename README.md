@@ -394,7 +394,7 @@ Every request above is ready to run in **`SmartX.Api/SmartX.Api.http`**.
 
 ## 8. Feedback, tests and troubleshooting
 
-- **Feedback ledger:** [FEEDBACK.md](FEEDBACK.md) lists every change made after Part 1 and Part 2 feedback, and every defect found and fixed during the final PoE.
+- **Feedback ledger:** [FEEDBACK.md](FEEDBACK.md) lists every change made after Part 1 (90 %) and Part 2 (100 %, "Excellent submission") feedback, and every defect found and fixed during the final PoE.
 - **Tests:** `dotnet test SmartX.Tests` → 46 passing.
   - Part 2: queues, stack, dictionaries, sets and the predictive engine.
   - Final PoE:
@@ -419,6 +419,6 @@ Every request above is ready to run in **`SmartX.Api/SmartX.Api.http`**.
 |---|---|
 | Repository | https://github.com/evanildo26/SmartX-PROG7312 |
 | Video demo | [add YouTube link] |
-| Report (PDF) | `docs/PROG7312_PoE_Report_ST10437401.pdf` |
+| Report (PDF) | [docs/PROG7312_PoE_Report_ST10437401.pdf](docs/PROG7312_PoE_Report_ST10437401.pdf) |
 | Feedback ledger | [FEEDBACK.md](FEEDBACK.md) |
 | Author | Evanildo Julio Chaves Jose (ST10437401) |

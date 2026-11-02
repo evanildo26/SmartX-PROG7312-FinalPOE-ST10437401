@@ -17,13 +17,13 @@ Each row names the problem, the change, and the file where the change can be che
 | 1.5 | Integration | Part 1 sensors lived in a separate registry. | Sensors registered in Part 1 also join the Part 2 live registry, its queues and (now) the mesh graph. | `SmartX.Api/Program.cs` |
 | 1.6 | Referencing | Reference list formatting was inconsistent. | All report references use one style (IEEE), with clean official URLs. | Reports |
 
-## 2. After Part 2
+## 2. After Part 2 (mark: 100 %)
 
 ### 2a. Lecturer feedback
 
 | # | Area | Lecturer's comment | Change made | Files |
 |---|---|---|---|---|
-| 2.1 | _fill in_ | _copy the comment from your Part 2 marking rubric_ | _describe what you changed_ | _file(s)_ |
+| 2.1 | Overall | "Excellent submission. Well done, Jose." — **100/100** (feedback dated 2 November 2026) | No corrections were requested. The defects in 2b and the final-PoE improvements in section 3 were still made to raise quality further. | — |
 
 ### 2b. Defects found while testing Part 2 and fixed
 
